@@ -26,7 +26,7 @@ struct StreamChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "reasoning_content")]
     reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Option<Vec<DeltaToolCall>>,
@@ -792,6 +792,24 @@ mod tests {
             message_start["message"]["usage"]["cache_read_input_tokens"],
             0
         );
+    }
+
+    #[tokio::test]
+    async fn streaming_accepts_deepseek_reasoning_content_alias() {
+        let input = concat!(
+            "data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl_1\",\"model\":\"deepseek-v4-pro\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let events = collect_events(input).await;
+        let thinking_delta = events
+            .iter()
+            .find(|event| event["type"] == "content_block_delta")
+            .expect("thinking delta should be emitted");
+
+        assert_eq!(thinking_delta["delta"]["type"], "thinking_delta");
+        assert_eq!(thinking_delta["delta"]["thinking"], "think");
     }
 
     #[tokio::test]

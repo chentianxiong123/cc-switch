@@ -13,6 +13,18 @@ use crate::services::{EndpointLatency, HealthStatus, StreamCheckResult, SyncDeci
 
 use super::super::form::ProviderAddField;
 
+const KNOWN_COMPAT_SUFFIXES: &[&str] = &[
+    "/api/claudecode",
+    "/api/anthropic",
+    "/apps/anthropic",
+    "/api/coding",
+    "/claudecode",
+    "/anthropic",
+    "/step_plan",
+    "/coding",
+    "/claude",
+];
+
 pub(crate) fn next_model_fetch_request_id() -> u64 {
     static NEXT_MODEL_FETCH_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
     NEXT_MODEL_FETCH_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
@@ -260,7 +272,7 @@ pub(crate) fn build_model_fetch_candidate_urls(
     }
 
     let append_models = format!("{base}/models");
-    let append_v1_models = if base.ends_with("/v1") || base.ends_with("/v1beta") {
+    let append_versioned_models = if base.ends_with("/v1") || base.ends_with("/v1beta") {
         None
     } else {
         Some(format!("{base}/v1/models"))
@@ -269,14 +281,25 @@ pub(crate) fn build_model_fetch_candidate_urls(
     let mut urls: Vec<String> = Vec::new();
     match strategy {
         ModelFetchStrategy::Anthropic => {
-            if let Some(v1) = append_v1_models.as_ref() {
-                urls.push(v1.clone());
+            if let Some(versioned) = append_versioned_models.as_ref() {
+                urls.push(versioned.clone());
+            } else {
+                urls.push(append_models.clone());
             }
-            urls.push(append_models);
+
+            if let Some(stripped) = strip_compat_suffix(base) {
+                let root = stripped.trim_end_matches('/');
+                if !root.is_empty() && root.contains("://") {
+                    urls.push(format!("{root}/v1/models"));
+                    urls.push(format!("{root}/models"));
+                }
+            } else if append_versioned_models.is_some() {
+                urls.push(append_models);
+            }
         }
         ModelFetchStrategy::Bearer | ModelFetchStrategy::GoogleApiKey => {
             urls.push(append_models);
-            if let Some(v1) = append_v1_models.as_ref() {
+            if let Some(v1) = append_versioned_models.as_ref() {
                 urls.push(v1.clone());
             }
         }
@@ -285,6 +308,15 @@ pub(crate) fn build_model_fetch_candidate_urls(
     let mut seen = HashSet::new();
     urls.retain(|url| seen.insert(url.clone()));
     urls
+}
+
+fn strip_compat_suffix(base: &str) -> Option<&str> {
+    let lower = base.to_ascii_lowercase();
+    KNOWN_COMPAT_SUFFIXES.iter().find_map(|suffix| {
+        lower
+            .ends_with(suffix)
+            .then(|| &base[..base.len() - suffix.len()])
+    })
 }
 
 pub(crate) fn parse_model_ids_from_response(payload: &Value) -> Vec<String> {
@@ -356,8 +388,14 @@ pub(crate) async fn fetch_provider_models_for_tui(
 
         match req.send().await {
             Ok(resp) => {
-                if !resp.status().is_success() {
-                    last_err = format!("HTTP {} ({url})", resp.status());
+                let status = resp.status();
+                if !status.is_success() {
+                    last_err = format!("HTTP {status} ({url})");
+                    if status != reqwest::StatusCode::NOT_FOUND
+                        && status != reqwest::StatusCode::METHOD_NOT_ALLOWED
+                    {
+                        return Err(last_err);
+                    }
                     continue;
                 }
                 match resp.json::<Value>().await {

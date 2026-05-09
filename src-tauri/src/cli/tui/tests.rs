@@ -606,6 +606,22 @@ fn model_fetch_candidate_urls_prefers_v1_for_anthropic_base() {
 }
 
 #[test]
+fn model_fetch_candidate_urls_strip_anthropic_compat_suffix() {
+    let urls = build_model_fetch_candidate_urls(
+        "https://api.deepseek.com/anthropic",
+        ModelFetchStrategy::Anthropic,
+    );
+    assert_eq!(
+        urls,
+        vec![
+            "https://api.deepseek.com/anthropic/v1/models".to_string(),
+            "https://api.deepseek.com/v1/models".to_string(),
+            "https://api.deepseek.com/models".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn model_fetch_candidate_urls_for_gemini_v1beta_keeps_models_endpoint() {
     let urls = build_model_fetch_candidate_urls(
         "https://generativelanguage.googleapis.com/v1beta",

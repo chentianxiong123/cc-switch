@@ -78,6 +78,14 @@ pub fn sanitize_system_text(text: &str) -> Option<Cow<'_, str>> {
 }
 
 pub fn anthropic_to_openai(body: Value, cache_key: Option<&str>) -> Result<Value, ProxyError> {
+    anthropic_to_openai_with_reasoning_content(body, cache_key, false)
+}
+
+pub fn anthropic_to_openai_with_reasoning_content(
+    body: Value,
+    cache_key: Option<&str>,
+    preserve_reasoning_content: bool,
+) -> Result<Value, ProxyError> {
     let mut result = json!({});
 
     if let Some(model) = body.get("model").and_then(|m| m.as_str()) {
@@ -111,7 +119,11 @@ pub fn anthropic_to_openai(body: Value, cache_key: Option<&str>) -> Result<Value
         for msg in msgs {
             let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("user");
             let content = msg.get("content");
-            messages.extend(convert_message_to_openai(role, content)?);
+            messages.extend(convert_message_to_openai(
+                role,
+                content,
+                preserve_reasoning_content,
+            )?);
         }
     }
 
@@ -235,6 +247,7 @@ fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
 fn convert_message_to_openai(
     role: &str,
     content: Option<&Value>,
+    preserve_reasoning_content: bool,
 ) -> Result<Vec<Value>, ProxyError> {
     let mut result = Vec::new();
 
@@ -254,6 +267,7 @@ fn convert_message_to_openai(
     if let Some(blocks) = content.as_array() {
         let mut content_parts = Vec::new();
         let mut tool_calls = Vec::new();
+        let mut reasoning_parts = Vec::new();
 
         for block in blocks {
             let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -310,7 +324,13 @@ fn convert_message_to_openai(
                         "content": content_str
                     }));
                 }
-                "thinking" => {}
+                "thinking" => {
+                    if let Some(thinking) = block.get("thinking").and_then(|t| t.as_str()) {
+                        if !thinking.is_empty() {
+                            reasoning_parts.push(thinking.to_string());
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -333,6 +353,15 @@ fn convert_message_to_openai(
 
             if !tool_calls.is_empty() {
                 msg["tool_calls"] = json!(tool_calls);
+            }
+
+            if preserve_reasoning_content && role == "assistant" && !tool_calls.is_empty() {
+                let reasoning_content = if reasoning_parts.is_empty() {
+                    "tool call".to_string()
+                } else {
+                    reasoning_parts.join("\n")
+                };
+                msg["reasoning_content"] = json!(reasoning_content);
             }
 
             result.push(msg);
@@ -378,6 +407,12 @@ pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
 
     let mut content = Vec::new();
     let mut has_tool_use = false;
+
+    if let Some(reasoning_content) = message.get("reasoning_content").and_then(|r| r.as_str()) {
+        if !reasoning_content.is_empty() {
+            content.push(json!({"type": "thinking", "thinking": reasoning_content}));
+        }
+    }
 
     if let Some(msg_content) = message.get("content") {
         if let Some(text) = msg_content.as_str() {
@@ -690,5 +725,135 @@ mod tests {
 
         assert_eq!(result["max_completion_tokens"], 2048);
         assert!(result.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn anthropic_to_openai_does_not_emit_reasoning_content_by_default() {
+        let input = json!({
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call the tool."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Tokyo"}}
+                ]
+            }]
+        });
+
+        let result = anthropic_to_openai(input, None).unwrap();
+
+        assert!(result["messages"][0].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn anthropic_to_openai_tool_use_preserves_reasoning_content_when_enabled() {
+        let input = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call the tool."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Tokyo"}}
+                ]
+            }]
+        });
+
+        let result = anthropic_to_openai_with_reasoning_content(input, None, true).unwrap();
+
+        assert_eq!(
+            result["messages"][0]["reasoning_content"],
+            "I should call the tool."
+        );
+        assert_eq!(result["messages"][0]["tool_calls"][0]["id"], "call_1");
+    }
+
+    #[test]
+    fn anthropic_to_openai_tool_use_injects_placeholder_reasoning_content_when_missing() {
+        let input = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Tokyo"}}
+                ]
+            }]
+        });
+
+        let result = anthropic_to_openai_with_reasoning_content(input, None, true).unwrap();
+
+        assert_eq!(result["messages"][0]["reasoning_content"], "tool call");
+    }
+
+    #[test]
+    fn openai_to_anthropic_maps_reasoning_content_to_thinking_block() {
+        let input = json!({
+            "id": "chatcmpl-deepseek",
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Need the current date before calling weather.",
+                    "content": "Let me check.",
+                    "tool_calls": [{
+                        "id": "call_date",
+                        "type": "function",
+                        "function": {"name": "get_date", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+
+        let result = openai_to_anthropic(input).unwrap();
+
+        assert_eq!(result["content"][0]["type"], "thinking");
+        assert_eq!(
+            result["content"][0]["thinking"],
+            "Need the current date before calling weather."
+        );
+        assert_eq!(result["content"][1]["type"], "text");
+        assert_eq!(result["content"][2]["type"], "tool_use");
+    }
+
+    #[test]
+    fn deepseek_reasoning_content_round_trips_for_tool_calls() {
+        let upstream_response = json!({
+            "id": "chatcmpl-deepseek",
+            "model": "deepseek-v4-flash",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Need the current date before calling weather.",
+                    "content": "Let me check.",
+                    "tool_calls": [{
+                        "id": "call_date",
+                        "type": "function",
+                        "function": {"name": "get_date", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+        });
+
+        let anthropic_response = openai_to_anthropic(upstream_response).unwrap();
+        let follow_up_request = json!({
+            "model": "deepseek-v4-flash",
+            "messages": [{
+                "role": "assistant",
+                "content": anthropic_response["content"].clone()
+            }]
+        });
+        let replayed =
+            anthropic_to_openai_with_reasoning_content(follow_up_request, None, true).unwrap();
+        let msg = &replayed["messages"][0];
+
+        assert_eq!(
+            msg["reasoning_content"],
+            "Need the current date before calling weather."
+        );
+        assert_eq!(msg["tool_calls"][0]["id"], "call_date");
+        assert_eq!(msg["tool_calls"][0]["function"]["name"], "get_date");
     }
 }

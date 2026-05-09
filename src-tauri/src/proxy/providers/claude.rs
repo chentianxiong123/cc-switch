@@ -58,6 +58,40 @@ pub fn claude_api_format_needs_transform(api_format: &str) -> bool {
     matches!(api_format, "openai_chat" | "openai_responses")
 }
 
+fn is_reasoning_content_compatible_identifier(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("moonshot") || value.contains("kimi") || value.contains("deepseek")
+}
+
+fn should_preserve_reasoning_content_for_openai_chat(
+    provider: &Provider,
+    body: &serde_json::Value,
+) -> bool {
+    if body
+        .get("model")
+        .and_then(|m| m.as_str())
+        .is_some_and(is_reasoning_content_compatible_identifier)
+    {
+        return true;
+    }
+
+    let settings = &provider.settings_config;
+    let base_urls = [
+        settings
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(|v| v.as_str()),
+        settings.get("base_url").and_then(|v| v.as_str()),
+        settings.get("baseURL").and_then(|v| v.as_str()),
+        settings.get("apiEndpoint").and_then(|v| v.as_str()),
+    ];
+
+    base_urls
+        .into_iter()
+        .flatten()
+        .any(is_reasoning_content_compatible_identifier)
+}
+
 pub fn transform_claude_request_for_api_format(
     body: serde_json::Value,
     provider: &Provider,
@@ -79,7 +113,19 @@ pub fn transform_claude_request_for_api_format(
                 .and_then(|meta| meta.provider_type.as_deref())
                 == Some("codex_oauth"),
         ),
-        "openai_chat" => super::transform::anthropic_to_openai(body, Some(cache_key)),
+        "openai_chat" => {
+            let preserve_reasoning_content =
+                should_preserve_reasoning_content_for_openai_chat(provider, &body);
+            if preserve_reasoning_content {
+                super::transform::anthropic_to_openai_with_reasoning_content(
+                    body,
+                    Some(cache_key),
+                    true,
+                )
+            } else {
+                super::transform::anthropic_to_openai(body, Some(cache_key))
+            }
+        }
         _ => Ok(body),
     }
 }
@@ -449,5 +495,70 @@ mod tests {
             .expect("codex oauth should resolve auth");
         assert_eq!(format!("{:?}", auth.strategy), "CodexOAuth");
         assert!(adapter.needs_transform(&provider));
+    }
+
+    #[test]
+    fn openai_chat_transform_preserves_reasoning_content_for_deepseek_model() {
+        let provider: Provider = serde_json::from_value(json!({
+            "id": "deepseek",
+            "name": "DeepSeek",
+            "settingsConfig": {
+                "api_format": "openai_chat",
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.deepseek.com",
+                    "ANTHROPIC_AUTH_TOKEN": "token-1"
+                }
+            }
+        }))
+        .expect("provider should deserialize");
+        let body = json!({
+            "model": "deepseek-v4-pro",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call the tool."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}
+                ]
+            }]
+        });
+
+        let result =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat").unwrap();
+
+        assert_eq!(
+            result["messages"][0]["reasoning_content"],
+            "I should call the tool."
+        );
+    }
+
+    #[test]
+    fn openai_chat_transform_skips_reasoning_content_for_generic_provider() {
+        let provider: Provider = serde_json::from_value(json!({
+            "id": "generic",
+            "name": "Generic",
+            "settingsConfig": {
+                "api_format": "openai_chat",
+                "env": {
+                    "ANTHROPIC_BASE_URL": "https://api.example.com",
+                    "ANTHROPIC_AUTH_TOKEN": "token-1"
+                }
+            }
+        }))
+        .expect("provider should deserialize");
+        let body = json!({
+            "model": "gpt-4o",
+            "messages": [{
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should call the tool."},
+                    {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {}}
+                ]
+            }]
+        });
+
+        let result =
+            transform_claude_request_for_api_format(body, &provider, "openai_chat").unwrap();
+
+        assert!(result["messages"][0].get("reasoning_content").is_none());
     }
 }
