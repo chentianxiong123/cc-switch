@@ -440,9 +440,9 @@ pub fn tui_provider_edit_title(name: &str) -> String {
 
 pub fn tui_provider_detail_keys() -> &'static str {
     if is_chinese() {
-        "按键：s=切换  e=编辑  t=测速  c=健康检查"
+        "按键：Space=切换  e=编辑  t=测试"
     } else {
-        "Keys: s=switch  e=edit  t=speedtest  c=stream check"
+        "Keys: Space=switch  e=edit  t=test"
     }
 }
 
@@ -467,6 +467,14 @@ pub fn tui_key_speedtest() -> &'static str {
         "测速"
     } else {
         "speedtest"
+    }
+}
+
+pub fn tui_key_test() -> &'static str {
+    if is_chinese() {
+        "测试"
+    } else {
+        "test"
     }
 }
 
@@ -555,6 +563,14 @@ pub fn tui_key_import() -> &'static str {
         "导入"
     } else {
         "import"
+    }
+}
+
+pub fn tui_key_failover() -> &'static str {
+    if is_chinese() {
+        "管理故障转移"
+    } else {
+        "manage failover"
     }
 }
 

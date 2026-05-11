@@ -970,6 +970,27 @@ pub(crate) fn supports_provider_stream_check(app_type: &AppType) -> bool {
     !matches!(app_type, AppType::OpenClaw)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderTestMenuItem {
+    Speedtest,
+    StreamCheck,
+}
+
+pub(crate) fn provider_test_menu_items(app_type: &AppType) -> Vec<ProviderTestMenuItem> {
+    let mut items = vec![ProviderTestMenuItem::Speedtest];
+    if supports_provider_stream_check(app_type) {
+        items.push(ProviderTestMenuItem::StreamCheck);
+    }
+    items
+}
+
+pub(crate) fn provider_test_menu_item_label(item: ProviderTestMenuItem) -> &'static str {
+    match item {
+        ProviderTestMenuItem::Speedtest => texts::tui_key_speedtest(),
+        ProviderTestMenuItem::StreamCheck => texts::tui_key_stream_check(),
+    }
+}
+
 pub(crate) fn visible_mcp<'a>(
     filter: &FilterState,
     data: &'a UiData,

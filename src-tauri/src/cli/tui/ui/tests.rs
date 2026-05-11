@@ -6681,7 +6681,7 @@ fn provider_form_model_field_enter_hint_uses_fetch_model() {
 }
 
 #[test]
-fn provider_detail_key_bar_shows_stream_check_hint() {
+fn provider_detail_key_bar_shows_test_hint() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6701,11 +6701,12 @@ fn provider_detail_key_bar_shows_stream_check_hint() {
         all.push('\n');
     }
 
-    assert!(all.contains("stream check"));
+    assert!(all.contains("t test"));
+    assert!(!all.contains("c stream check"));
 }
 
 #[test]
-fn openclaw_provider_list_key_bar_hides_stream_check_hint() {
+fn openclaw_provider_list_key_bar_shows_test_hint_only() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6723,12 +6724,54 @@ fn openclaw_provider_list_key_bar_hides_stream_check_hint() {
         all.push('\n');
     }
 
-    assert!(all.contains("speedtest"));
+    assert!(all.contains("t test"));
+    assert!(!all.contains("speedtest"));
     assert!(!all.contains("stream check"));
 }
 
 #[test]
-fn openclaw_provider_list_key_bar_uses_additive_mode_actions() {
+fn provider_test_menu_renders_supported_test_actions() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::ProviderTestMenu {
+        provider_id: "p1".to_string(),
+        selected: 0,
+    };
+    let data = minimal_data(&app.app_type);
+
+    let all = all_text(&render(&app, &data));
+
+    assert!(all.contains("Test"), "{all}");
+    assert!(all.contains("speedtest"), "{all}");
+    assert!(all.contains("stream check"), "{all}");
+}
+
+#[test]
+fn openclaw_provider_test_menu_hides_stream_check() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::OpenClaw));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::ProviderTestMenu {
+        provider_id: "p1".to_string(),
+        selected: 0,
+    };
+    let data = minimal_data(&app.app_type);
+
+    let all = all_text(&render(&app, &data));
+
+    assert!(all.contains("speedtest"), "{all}");
+    assert!(!all.contains("stream check"), "{all}");
+}
+
+#[test]
+fn openclaw_provider_list_key_bar_uses_common_provider_actions() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6746,13 +6789,14 @@ fn openclaw_provider_list_key_bar_uses_additive_mode_actions() {
         all.push('\n');
     }
 
-    assert!(all.contains("s add/remove"));
-    assert!(all.contains("x set default"));
-    assert!(!all.contains("s switch"));
+    assert!(all.contains("Space switch"), "{all}");
+    assert!(all.contains("t test"), "{all}");
+    assert!(all.contains("x set default"), "{all}");
+    assert!(!all.contains("s add/remove"), "{all}");
 }
 
 #[test]
-fn failover_provider_list_key_bar_hides_move_hint_and_gates_switch_hint() {
+fn failover_provider_list_key_bar_hides_move_hint_and_keeps_common_switch_hint() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6769,7 +6813,7 @@ fn failover_provider_list_key_bar_hides_move_hint_and_gates_switch_hint() {
     data.proxy.auto_failover_enabled = true;
     let enabled_text = all_text(&render_with_size(&app, &data, 180, 40));
     let enabled_keys = line_with(&enabled_text, "manage failover");
-    assert!(!enabled_keys.contains("Space"), "{enabled_keys}");
+    assert!(enabled_keys.contains("Space"), "{enabled_keys}");
     assert!(!enabled_keys.contains("</>"), "{enabled_keys}");
 }
 
@@ -6891,8 +6935,10 @@ fn opencode_provider_list_key_bar_uses_config_membership_actions() {
 
     let all = all_text(&render(&app, &data));
 
-    assert!(all.contains("s add/remove"), "{all}");
-    assert!(all.contains("c stream check"), "{all}");
+    assert!(all.contains("Space switch"), "{all}");
+    assert!(all.contains("t test"), "{all}");
+    assert!(!all.contains("s add/remove"), "{all}");
+    assert!(!all.contains("c stream check"), "{all}");
     assert!(!all.contains("s switch"), "{all}");
     assert!(!all.contains("x set default"), "{all}");
 }
@@ -6920,7 +6966,7 @@ fn opencode_provider_list_marks_rows_in_config_without_current_marker() {
 }
 
 #[test]
-fn openclaw_provider_detail_key_bar_hides_stream_check_hint() {
+fn openclaw_provider_detail_key_bar_shows_test_hint_only() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6940,12 +6986,13 @@ fn openclaw_provider_detail_key_bar_hides_stream_check_hint() {
         all.push('\n');
     }
 
-    assert!(all.contains("speedtest"));
+    assert!(all.contains("t test"));
+    assert!(!all.contains("speedtest"));
     assert!(!all.contains("stream check"));
 }
 
 #[test]
-fn openclaw_provider_detail_key_bar_uses_additive_mode_actions() {
+fn openclaw_provider_detail_key_bar_uses_common_provider_actions() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -6965,9 +7012,10 @@ fn openclaw_provider_detail_key_bar_uses_additive_mode_actions() {
         all.push('\n');
     }
 
-    assert!(all.contains("s add/remove"));
-    assert!(all.contains("x set default"));
-    assert!(!all.contains("s switch"));
+    assert!(all.contains("Space switch"), "{all}");
+    assert!(all.contains("t test"), "{all}");
+    assert!(all.contains("x set default"), "{all}");
+    assert!(!all.contains("s add/remove"), "{all}");
 }
 
 #[test]
@@ -6984,8 +7032,10 @@ fn opencode_provider_detail_key_bar_uses_config_membership_actions() {
 
     let all = all_text(&render(&app, &data));
 
-    assert!(all.contains("s add/remove"), "{all}");
-    assert!(all.contains("c stream check"), "{all}");
+    assert!(all.contains("Space switch"), "{all}");
+    assert!(all.contains("t test"), "{all}");
+    assert!(!all.contains("s add/remove"), "{all}");
+    assert!(!all.contains("c stream check"), "{all}");
     assert!(
         all.contains(texts::tui_label_provider_config_status()),
         "{all}"
@@ -7307,8 +7357,10 @@ fn openclaw_provider_list_key_bar_localizes_actions_in_chinese() {
     let all = all_text(&render(&app, &minimal_data(&app.app_type)));
     let compact = all.replace(' ', "");
 
-    assert!(compact.contains("s添加/移除"), "{all}");
+    assert!(compact.contains("Space切换"), "{all}");
+    assert!(compact.contains("t测试"), "{all}");
     assert!(compact.contains("x设为默认"), "{all}");
+    assert!(!compact.contains("s添加/移除"), "{all}");
     assert!(!all.contains("add/remove"), "{all}");
     assert!(!all.contains("set default"), "{all}");
 }
@@ -7328,8 +7380,10 @@ fn openclaw_provider_detail_key_bar_localizes_actions_in_chinese() {
     let all = all_text(&render(&app, &minimal_data(&app.app_type)));
     let compact = all.replace(' ', "");
 
-    assert!(compact.contains("s添加/移除"), "{all}");
+    assert!(compact.contains("Space切换"), "{all}");
+    assert!(compact.contains("t测试"), "{all}");
     assert!(compact.contains("x设为默认"), "{all}");
+    assert!(!compact.contains("s添加/移除"), "{all}");
     assert!(!all.contains("add/remove"), "{all}");
     assert!(!all.contains("set default"), "{all}");
 }
@@ -7355,7 +7409,7 @@ fn provider_detail_keys_line_does_not_include_q_back() {
         all.push('\n');
     }
 
-    assert!(all.contains("speedtest"));
+    assert!(all.contains("t test"));
     assert!(
         !all.contains("q=back"),
         "provider detail inline keys should not include q=back"

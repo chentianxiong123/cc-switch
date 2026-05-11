@@ -41,6 +41,36 @@ impl App {
         Action::ProviderSwitch { id: row.id.clone() }
     }
 
+    pub(crate) fn provider_speedtest_action(&mut self, row: &super::data::ProviderRow) -> Action {
+        let Some(url) = row.api_url.clone() else {
+            self.push_toast(texts::tui_toast_provider_no_api_url(), ToastKind::Warning);
+            return Action::None;
+        };
+        self.overlay = Overlay::SpeedtestRunning { url: url.clone() };
+        Action::ProviderSpeedtest { url }
+    }
+
+    pub(crate) fn provider_stream_check_action(
+        &mut self,
+        row: &super::data::ProviderRow,
+    ) -> Action {
+        if !supports_provider_stream_check(&self.app_type) {
+            return Action::None;
+        }
+        self.overlay = Overlay::StreamCheckRunning {
+            provider_id: row.id.clone(),
+            provider_name: super::data::provider_display_name(&self.app_type, row),
+        };
+        Action::ProviderStreamCheck { id: row.id.clone() }
+    }
+
+    pub(crate) fn open_provider_test_menu(&mut self, row: &super::data::ProviderRow) {
+        self.overlay = Overlay::ProviderTestMenu {
+            provider_id: row.id.clone(),
+            selected: 0,
+        };
+    }
+
     pub(crate) fn on_providers_key(&mut self, key: KeyEvent, data: &UiData) -> Action {
         let visible = visible_providers(&self.app_type, &self.filter, data);
         match key.code {
@@ -63,13 +93,6 @@ impl App {
             KeyCode::Char('a') => {
                 self.open_provider_add_form();
                 Action::None
-            }
-            KeyCode::Char('i') => {
-                if data.providers.rows.is_empty() {
-                    Action::ProviderImportLiveConfig
-                } else {
-                    Action::None
-                }
             }
             KeyCode::Char('e') => {
                 let Some(row) = visible.get(self.provider_idx) else {
@@ -135,12 +158,8 @@ impl App {
                 let Some(row) = visible.get(self.provider_idx) else {
                     return Action::None;
                 };
-                let Some(url) = row.api_url.clone() else {
-                    self.push_toast(texts::tui_toast_provider_no_api_url(), ToastKind::Warning);
-                    return Action::None;
-                };
-                self.overlay = Overlay::SpeedtestRunning { url: url.clone() };
-                Action::ProviderSpeedtest { url }
+                self.open_provider_test_menu(row);
+                Action::None
             }
             KeyCode::Char('o') => {
                 let Some(row) = visible.get(self.provider_idx) else {
@@ -150,19 +169,6 @@ impl App {
                     return Action::None;
                 }
                 Action::ProviderLaunchTemporary { id: row.id.clone() }
-            }
-            KeyCode::Char('c') => {
-                if !supports_provider_stream_check(&self.app_type) {
-                    return Action::None;
-                }
-                let Some(row) = visible.get(self.provider_idx) else {
-                    return Action::None;
-                };
-                self.overlay = Overlay::StreamCheckRunning {
-                    provider_id: row.id.clone(),
-                    provider_name: super::data::provider_display_name(&self.app_type, row),
-                };
-                Action::ProviderStreamCheck { id: row.id.clone() }
             }
             KeyCode::Char('f') => {
                 if !supports_failover_controls(&self.app_type) {
@@ -235,28 +241,14 @@ impl App {
                 }
             }
             KeyCode::Char('t') => {
-                let Some(url) = row.api_url.clone() else {
-                    self.push_toast(texts::tui_toast_provider_no_api_url(), ToastKind::Warning);
-                    return Action::None;
-                };
-                self.overlay = Overlay::SpeedtestRunning { url: url.clone() };
-                Action::ProviderSpeedtest { url }
+                self.open_provider_test_menu(row);
+                Action::None
             }
             KeyCode::Char('o') => {
                 if !supports_temporary_provider_launch(&self.app_type) {
                     return Action::None;
                 }
                 Action::ProviderLaunchTemporary { id: row.id.clone() }
-            }
-            KeyCode::Char('c') => {
-                if !supports_provider_stream_check(&self.app_type) {
-                    return Action::None;
-                }
-                self.overlay = Overlay::StreamCheckRunning {
-                    provider_id: row.id.clone(),
-                    provider_name: super::data::provider_display_name(&self.app_type, row),
-                };
-                Action::ProviderStreamCheck { id: row.id.clone() }
             }
             KeyCode::Char('f') => {
                 if !supports_failover_controls(&self.app_type) {

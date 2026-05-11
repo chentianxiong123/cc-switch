@@ -101,6 +101,25 @@ mod tests {
         UiData::default()
     }
 
+    fn claude_provider_row(id: &str) -> ProviderRow {
+        ProviderRow {
+            id: id.to_string(),
+            provider: Provider::with_id(
+                id.to_string(),
+                "Provider One".to_string(),
+                json!({"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"sk-demo"}}),
+                None,
+            ),
+            api_url: Some("https://example.com".to_string()),
+            is_current: false,
+            is_in_config: true,
+            is_saved: true,
+            is_default_model: false,
+            primary_model_id: None,
+            default_model_id: None,
+        }
+    }
+
     fn nav_index(app: &App, item: NavItem) -> usize {
         app.nav_items()
             .iter()
@@ -986,6 +1005,18 @@ mod tests {
     }
 
     #[test]
+    fn providers_i_key_is_noop() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let action = app.on_key(key(KeyCode::Char('i')), &UiData::default());
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
     fn providers_s_key_triggers_switch_action() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
@@ -1079,34 +1110,17 @@ mod tests {
     }
 
     #[test]
-    fn providers_c_key_requests_stream_check() {
+    fn providers_c_key_is_noop() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
         app.focus = Focus::Content;
 
         let mut data = UiData::default();
-        data.providers.rows.push(super::super::data::ProviderRow {
-            id: "p1".to_string(),
-            provider: crate::provider::Provider::with_id(
-                "p1".to_string(),
-                "Provider One".to_string(),
-                json!({"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"sk-demo"}}),
-                None,
-            ),
-            api_url: Some("https://example.com".to_string()),
-            is_current: false,
-            is_in_config: true,
-            is_saved: true,
-            is_default_model: false,
-            primary_model_id: None,
-            default_model_id: None,
-        });
+        data.providers.rows.push(claude_provider_row("p1"));
 
         let action = app.on_key(key(KeyCode::Char('c')), &data);
-        assert!(matches!(action, Action::ProviderStreamCheck { id } if id == "p1"));
-        assert!(
-            matches!(app.overlay, Overlay::StreamCheckRunning { ref provider_name, .. } if provider_name == "Provider One")
-        );
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
     }
 
     #[test]
@@ -1136,6 +1150,121 @@ mod tests {
         let action = app.on_key(key(KeyCode::Char('c')), &data);
         assert!(matches!(action, Action::None));
         assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn providers_t_key_opens_test_menu() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('t')), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::ProviderTestMenu {
+                ref provider_id,
+                selected: 0
+            } if provider_id == "p1"
+        ));
+    }
+
+    #[test]
+    fn provider_test_menu_enter_runs_speedtest() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::ProviderTestMenu {
+            provider_id: "p1".to_string(),
+            selected: 0,
+        };
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(
+            matches!(action, Action::ProviderSpeedtest { ref url } if url == "https://example.com")
+        );
+        assert!(
+            matches!(app.overlay, Overlay::SpeedtestRunning { ref url } if url == "https://example.com")
+        );
+    }
+
+    #[test]
+    fn provider_test_menu_second_item_runs_stream_check() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::ProviderTestMenu {
+            provider_id: "p1".to_string(),
+            selected: 1,
+        };
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(action, Action::ProviderStreamCheck { ref id } if id == "p1"));
+        assert!(
+            matches!(app.overlay, Overlay::StreamCheckRunning { ref provider_name, .. } if provider_name == "Provider One")
+        );
+    }
+
+    #[test]
+    fn provider_test_menu_t_key_is_noop() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::ProviderTestMenu {
+            provider_id: "p1".to_string(),
+            selected: 0,
+        };
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('t')), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::ProviderTestMenu {
+                ref provider_id,
+                selected: 0
+            } if provider_id == "p1"
+        ));
+    }
+
+    #[test]
+    fn provider_test_menu_c_key_is_noop() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::ProviderTestMenu {
+            provider_id: "p1".to_string(),
+            selected: 1,
+        };
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('c')), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::ProviderTestMenu {
+                ref provider_id,
+                selected: 1
+            } if provider_id == "p1"
+        ));
     }
 
     #[test]
@@ -1461,7 +1590,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_detail_c_key_requests_stream_check() {
+    fn provider_detail_c_key_is_noop() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::ProviderDetail {
             id: "p1".to_string(),
@@ -1469,28 +1598,34 @@ mod tests {
         app.focus = Focus::Content;
 
         let mut data = UiData::default();
-        data.providers.rows.push(super::super::data::ProviderRow {
-            id: "p1".to_string(),
-            provider: crate::provider::Provider::with_id(
-                "p1".to_string(),
-                "Provider One".to_string(),
-                json!({"env":{"ANTHROPIC_BASE_URL":"https://example.com","ANTHROPIC_AUTH_TOKEN":"sk-demo"}}),
-                None,
-            ),
-            api_url: Some("https://example.com".to_string()),
-            is_current: false,
-            is_in_config: true,
-            is_saved: true,
-            is_default_model: false,
-            primary_model_id: None,
-            default_model_id: None,
-        });
+        data.providers.rows.push(claude_provider_row("p1"));
 
         let action = app.on_key(key(KeyCode::Char('c')), &data);
-        assert!(matches!(action, Action::ProviderStreamCheck { id } if id == "p1"));
-        assert!(
-            matches!(app.overlay, Overlay::StreamCheckRunning { ref provider_name, .. } if provider_name == "Provider One")
-        );
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_detail_t_key_opens_test_menu() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::ProviderDetail {
+            id: "p1".to_string(),
+        };
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char('t')), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::ProviderTestMenu {
+                ref provider_id,
+                selected: 0
+            } if provider_id == "p1"
+        ));
     }
 
     #[test]

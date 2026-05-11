@@ -231,6 +231,62 @@ pub(super) fn render_claude_api_format_picker_overlay(
     frame.render_stateful_widget(list, body_area, &mut state);
 }
 
+pub(super) fn render_provider_test_menu_overlay(
+    frame: &mut Frame<'_>,
+    app: &App,
+    _data: &UiData,
+    content_area: Rect,
+    theme: &theme::Theme,
+    _provider_id: &str,
+    selected: usize,
+) {
+    let area = centered_rect_fixed(50, 8, content_area);
+    frame.render_widget(Clear, area);
+
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Plain)
+        .border_style(overlay_border_style(theme, false))
+        .title(texts::tui_provider_test_menu_title());
+    frame.render_widget(outer.clone(), area);
+    let inner = outer.inner(area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(inner);
+
+    render_key_bar_center(
+        frame,
+        chunks[0],
+        theme,
+        &[
+            ("↑↓", texts::tui_key_select()),
+            ("Enter", texts::tui_key_apply()),
+            ("Esc", texts::tui_key_close()),
+        ],
+    );
+
+    let body_area = inset_top(chunks[1], 1);
+    let items = app::provider_test_menu_items(&app.app_type)
+        .into_iter()
+        .map(|item| ListItem::new(Line::raw(app::provider_test_menu_item_label(item))));
+
+    let list = List::new(items)
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
+
+    let mut state = ListState::default();
+    state.select(Some(
+        selected.min(
+            app::provider_test_menu_items(&app.app_type)
+                .len()
+                .saturating_sub(1),
+        ),
+    ));
+    frame.render_stateful_widget(list, body_area, &mut state);
+}
+
 pub(super) fn render_model_fetch_picker_overlay(
     frame: &mut Frame<'_>,
     content_area: Rect,

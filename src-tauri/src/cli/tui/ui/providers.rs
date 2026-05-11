@@ -94,67 +94,33 @@ pub(super) fn render_providers(
     let selected_supports_quota = visible
         .get(app.provider_idx)
         .is_some_and(|row| data::quota_target_for_provider(&app.app_type, row).is_some());
-
     if app.focus == Focus::Content {
         let mut keys = Vec::new();
-        if !data.providers.rows.is_empty() {
-            keys.push(("Enter", texts::tui_key_details()));
-        }
-        if matches!(
-            app.app_type,
-            crate::app_config::AppType::OpenCode | crate::app_config::AppType::OpenClaw
-        ) {
-            if data.providers.rows.is_empty() {
-                keys.push(("a", texts::tui_key_add()));
-                keys.push(("i", texts::tui_key_import()));
-            } else {
-                keys.extend([
-                    ("s", texts::tui_key_add_remove()),
-                    ("a", texts::tui_key_add()),
-                ]);
-                keys.extend([
-                    ("d", texts::tui_key_delete()),
-                    ("t", texts::tui_key_speedtest()),
-                ]);
-                if let Some(row) = visible.get(app.provider_idx) {
-                    keys.push(("e", texts::tui_key_edit()));
-                    if selected_supports_quota {
-                        keys.push(("r", texts::tui_key_refresh()));
-                    }
-                    if matches!(app.app_type, crate::app_config::AppType::OpenClaw)
-                        && row.is_in_config
-                    {
-                        keys.push(("x", texts::tui_key_set_default()));
-                    }
-                }
-                if matches!(app.app_type, crate::app_config::AppType::OpenCode) {
-                    keys.push(("c", texts::tui_key_stream_check()));
-                }
-            }
+        if visible.is_empty() {
+            keys.push(("a", texts::tui_key_add()));
         } else {
-            if data.providers.rows.is_empty() {
-                keys.push(("a", texts::tui_key_add()));
-                keys.push(("i", texts::tui_key_import()));
-            } else {
-                if !data.proxy.auto_failover_enabled {
-                    keys.push(("Space", texts::tui_key_switch()));
-                }
-                keys.extend([
-                    ("a", texts::tui_key_add()),
-                    ("e", texts::tui_key_edit()),
-                    ("d", texts::tui_key_delete()),
-                ]);
-                if selected_supports_quota {
-                    keys.push(("r", texts::tui_key_refresh()));
-                }
-                keys.push(("t", texts::tui_key_speedtest()));
-                if crate::cli::tui::app::supports_temporary_provider_launch(&app.app_type) {
-                    keys.push(("o", texts::tui_key_launch_temp()));
-                }
-                keys.push(("c", texts::tui_key_stream_check()));
+            keys.push(("Enter", texts::tui_key_details()));
+            keys.push(("Space", texts::tui_key_switch()));
+            keys.extend([
+                ("a", texts::tui_key_add()),
+                ("e", texts::tui_key_edit()),
+                ("d", texts::tui_key_delete()),
+                ("t", texts::tui_key_test()),
+            ]);
+            if selected_supports_quota {
+                keys.push(("r", texts::tui_key_refresh()));
+            }
+            if crate::cli::tui::app::supports_temporary_provider_launch(&app.app_type) {
+                keys.push(("o", texts::tui_key_launch_temp()));
             }
             if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
-                keys.push(("f", crate::t!("manage failover", "管理故障转移")));
+                keys.push(("f", texts::tui_key_failover()));
+            }
+            if let Some(row) = visible.get(app.provider_idx) {
+                if matches!(app.app_type, crate::app_config::AppType::OpenClaw) && row.is_in_config
+                {
+                    keys.push(("x", texts::tui_key_set_default()));
+                }
             }
         }
         render_key_bar_center(frame, chunks[0], theme, &keys);
@@ -270,48 +236,22 @@ pub(super) fn render_provider_detail(
         .split(inner);
 
     if app.focus == Focus::Content {
-        let mut keys = if matches!(
-            app.app_type,
-            crate::app_config::AppType::OpenCode | crate::app_config::AppType::OpenClaw
-        ) {
-            let keys = vec![
-                ("s", texts::tui_key_add_remove()),
-                ("e", texts::tui_key_edit()),
-            ];
-            keys
-        } else {
-            let keys = if data.proxy.auto_failover_enabled {
-                vec![("e", texts::tui_key_edit())]
-            } else {
-                vec![
-                    ("Space", texts::tui_key_switch()),
-                    ("e", texts::tui_key_edit()),
-                ]
-            };
-            keys
-        };
+        let mut keys = vec![
+            ("Space", texts::tui_key_switch()),
+            ("e", texts::tui_key_edit()),
+        ];
+        keys.push(("t", texts::tui_key_test()));
         if data::quota_target_for_provider(&app.app_type, row).is_some() {
             keys.push(("r", texts::tui_key_refresh()));
         }
-        keys.push(("t", texts::tui_key_speedtest()));
         if matches!(app.app_type, crate::app_config::AppType::OpenClaw) && row.is_in_config {
             keys.push(("x", texts::tui_key_set_default()));
-        } else if matches!(app.app_type, crate::app_config::AppType::OpenCode) {
-            keys.push(("c", texts::tui_key_stream_check()));
-        } else if !matches!(
-            app.app_type,
-            crate::app_config::AppType::OpenCode | crate::app_config::AppType::OpenClaw
-        ) {
-            if matches!(
-                app.app_type,
-                crate::app_config::AppType::Claude | crate::app_config::AppType::Codex
-            ) {
-                keys.push(("o", texts::tui_key_launch_temp()));
-            }
-            keys.push(("c", texts::tui_key_stream_check()));
-            if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
-                keys.push(("f", crate::t!("manage failover", "管理故障转移")));
-            }
+        }
+        if crate::cli::tui::app::supports_temporary_provider_launch(&app.app_type) {
+            keys.push(("o", texts::tui_key_launch_temp()));
+        }
+        if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
+            keys.push(("f", texts::tui_key_failover()));
         }
         render_key_bar_center(frame, chunks[0], theme, &keys);
     }

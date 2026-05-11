@@ -186,6 +186,10 @@ pub enum Overlay {
     CommonSnippetPicker {
         selected: usize,
     },
+    ProviderTestMenu {
+        provider_id: String,
+        selected: usize,
+    },
     FailoverQueueManager {
         selected: usize,
     },

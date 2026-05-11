@@ -12,6 +12,9 @@ impl App {
         if let Some(action) = self.handle_claude_api_format_picker_key(key, data) {
             return Some(action);
         }
+        if let Some(action) = self.handle_provider_test_menu_key(key, data) {
+            return Some(action);
+        }
         if let Some(action) = self.handle_claude_model_picker_key(key) {
             return Some(action);
         }
@@ -130,6 +133,61 @@ impl App {
                 }
 
                 Action::None
+            }
+            _ => Action::None,
+        })
+    }
+
+    fn handle_provider_test_menu_key(&mut self, key: KeyEvent, data: &UiData) -> Option<Action> {
+        let Overlay::ProviderTestMenu {
+            provider_id,
+            selected,
+        } = &mut self.overlay
+        else {
+            return None;
+        };
+
+        let items = provider_test_menu_items(&self.app_type);
+        if items.is_empty() {
+            self.overlay = Overlay::None;
+            return Some(Action::None);
+        }
+
+        *selected = (*selected).min(items.len() - 1);
+
+        Some(match key.code {
+            KeyCode::Esc => {
+                self.overlay = Overlay::None;
+                Action::None
+            }
+            KeyCode::Up => {
+                *selected = selected.saturating_sub(1);
+                Action::None
+            }
+            KeyCode::Down => {
+                *selected = (*selected + 1).min(items.len() - 1);
+                Action::None
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                let provider_id = provider_id.clone();
+                let item = items[*selected];
+                let row = data
+                    .providers
+                    .rows
+                    .iter()
+                    .find(|provider_row| provider_row.id == provider_id)
+                    .cloned();
+
+                self.overlay = Overlay::None;
+
+                let Some(row) = row else {
+                    return Some(Action::None);
+                };
+
+                match item {
+                    ProviderTestMenuItem::Speedtest => self.provider_speedtest_action(&row),
+                    ProviderTestMenuItem::StreamCheck => self.provider_stream_check_action(&row),
+                }
             }
             _ => Action::None,
         })
