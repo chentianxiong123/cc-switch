@@ -133,6 +133,30 @@ mod tests {
         }
     }
 
+    fn installed_skill(directory: &str, name: &str) -> crate::services::skill::InstalledSkill {
+        crate::services::skill::InstalledSkill {
+            id: format!("local:{directory}"),
+            name: name.to_string(),
+            description: None,
+            directory: directory.to_string(),
+            repo_owner: None,
+            repo_name: None,
+            repo_branch: None,
+            readme_url: None,
+            apps: crate::app_config::SkillApps::default(),
+            installed_at: 0,
+        }
+    }
+
+    fn unmanaged_skill(directory: &str) -> crate::services::skill::UnmanagedSkill {
+        crate::services::skill::UnmanagedSkill {
+            directory: directory.to_string(),
+            name: "Hello Skill".to_string(),
+            description: None,
+            found_in: vec!["claude".to_string()],
+        }
+    }
+
     fn prompt_import_candidate(
         filename: &str,
         content: &str,
@@ -275,18 +299,7 @@ mod tests {
         let mut data = UiData::default();
         data.skills
             .installed
-            .push(crate::services::skill::InstalledSkill {
-                id: "local:hello-skill".to_string(),
-                name: "Hello Skill".to_string(),
-                description: None,
-                directory: "hello-skill".to_string(),
-                repo_owner: None,
-                repo_name: None,
-                repo_branch: None,
-                readme_url: None,
-                apps: crate::app_config::SkillApps::default(),
-                installed_at: 0,
-            });
+            .push(installed_skill("hello-skill", "Hello Skill"));
 
         let action = app.on_key(key(KeyCode::Char('m')), &data);
         assert!(matches!(action, Action::None));
@@ -302,7 +315,83 @@ mod tests {
     }
 
     #[test]
-    fn skills_apps_picker_x_toggles_selected_app_and_enter_emits_action() {
+    fn skills_space_key_toggles_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills
+            .installed
+            .push(installed_skill("hello-skill", "Hello Skill"));
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(
+            action,
+            Action::SkillsToggle {
+                directory,
+                enabled: true
+            } if directory == "hello-skill"
+        ));
+    }
+
+    #[test]
+    fn skills_x_key_does_not_toggle_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills
+            .installed
+            .push(installed_skill("hello-skill", "Hello Skill"));
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn skill_detail_space_key_toggles_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SkillDetail {
+            directory: "hello-skill".to_string(),
+        };
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills
+            .installed
+            .push(installed_skill("hello-skill", "Hello Skill"));
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(
+            action,
+            Action::SkillsToggle {
+                directory,
+                enabled: true
+            } if directory == "hello-skill"
+        ));
+    }
+
+    #[test]
+    fn skill_detail_x_key_does_not_toggle_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SkillDetail {
+            directory: "hello-skill".to_string(),
+        };
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills
+            .installed
+            .push(installed_skill("hello-skill", "Hello Skill"));
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn skills_apps_picker_space_toggles_selected_app_and_enter_emits_action() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Skills;
         app.focus = Focus::Content;
@@ -310,22 +399,11 @@ mod tests {
         let mut data = UiData::default();
         data.skills
             .installed
-            .push(crate::services::skill::InstalledSkill {
-                id: "local:hello-skill".to_string(),
-                name: "Hello Skill".to_string(),
-                description: None,
-                directory: "hello-skill".to_string(),
-                repo_owner: None,
-                repo_name: None,
-                repo_branch: None,
-                readme_url: None,
-                apps: crate::app_config::SkillApps::default(),
-                installed_at: 0,
-            });
+            .push(installed_skill("hello-skill", "Hello Skill"));
 
         app.on_key(key(KeyCode::Char('m')), &data);
 
-        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(action, Action::None));
         assert!(matches!(
             &app.overlay,
@@ -341,6 +419,27 @@ mod tests {
     }
 
     #[test]
+    fn skills_apps_picker_x_does_not_toggle_selected_app() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills
+            .installed
+            .push(installed_skill("hello-skill", "Hello Skill"));
+
+        app.on_key(key(KeyCode::Char('m')), &data);
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SkillsAppsPicker { apps, .. } if !apps.codex
+        ));
+    }
+
+    #[test]
     fn skills_apps_picker_from_openclaw_targets_opencode_last_visible_row() {
         let mut app = App::new(Some(AppType::OpenClaw));
         app.route = Route::Skills;
@@ -349,18 +448,7 @@ mod tests {
         let mut data = UiData::default();
         data.skills
             .installed
-            .push(crate::services::skill::InstalledSkill {
-                id: "local:hello-skill".to_string(),
-                name: "Hello Skill".to_string(),
-                description: None,
-                directory: "hello-skill".to_string(),
-                repo_owner: None,
-                repo_name: None,
-                repo_branch: None,
-                readme_url: None,
-                apps: crate::app_config::SkillApps::default(),
-                installed_at: 0,
-            });
+            .push(installed_skill("hello-skill", "Hello Skill"));
 
         let action = app.on_key(key(KeyCode::Char('m')), &data);
         assert!(matches!(action, Action::None));
@@ -369,7 +457,7 @@ mod tests {
             Overlay::SkillsAppsPicker { selected, .. } if *selected == 3
         ));
 
-        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(action, Action::None));
         assert!(matches!(
             &app.overlay,
@@ -391,18 +479,7 @@ mod tests {
         let mut data = UiData::default();
         data.skills
             .installed
-            .push(crate::services::skill::InstalledSkill {
-                id: "local:hello-skill".to_string(),
-                name: "Hello Skill".to_string(),
-                description: None,
-                directory: "hello-skill".to_string(),
-                repo_owner: None,
-                repo_name: None,
-                repo_branch: None,
-                readme_url: None,
-                apps: crate::app_config::SkillApps::default(),
-                installed_at: 0,
-            });
+            .push(installed_skill("hello-skill", "Hello Skill"));
 
         let action = app.on_key(key(KeyCode::Char('d')), &data);
         assert!(matches!(action, Action::None));
@@ -412,6 +489,88 @@ mod tests {
                 action: ConfirmAction::SkillsUninstall { directory },
                 ..
             }) if directory == "hello-skill"
+        ));
+    }
+
+    #[test]
+    fn skills_repos_space_key_toggles_enabled() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SkillsRepos;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills.repos.push(crate::services::skill::SkillRepo {
+            owner: "anthropics".to_string(),
+            name: "skills".to_string(),
+            branch: "main".to_string(),
+            enabled: false,
+        });
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(
+            action,
+            Action::SkillsRepoToggleEnabled {
+                owner,
+                name,
+                enabled: true
+            } if owner == "anthropics" && name == "skills"
+        ));
+    }
+
+    #[test]
+    fn skills_repos_x_key_does_not_toggle_enabled() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SkillsRepos;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.skills.repos.push(crate::services::skill::SkillRepo {
+            owner: "anthropics".to_string(),
+            name: "skills".to_string(),
+            branch: "main".to_string(),
+            enabled: false,
+        });
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        assert!(matches!(action, Action::None));
+    }
+
+    #[test]
+    fn skills_import_picker_space_toggles_selection() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::SkillsImportPicker {
+            skills: vec![unmanaged_skill("hello-skill")],
+            selected_idx: 0,
+            selected: std::collections::HashSet::new(),
+        };
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SkillsImportPicker { selected, .. }
+                if selected.contains("hello-skill")
+        ));
+    }
+
+    #[test]
+    fn skills_import_picker_x_does_not_toggle_selection() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Skills;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::SkillsImportPicker {
+            skills: vec![unmanaged_skill("hello-skill")],
+            selected_idx: 0,
+            selected: std::collections::HashSet::new(),
+        };
+
+        let action = app.on_key(key(KeyCode::Char('x')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SkillsImportPicker { selected, .. } if selected.is_empty()
         ));
     }
 
@@ -1964,7 +2123,38 @@ mod tests {
     }
 
     #[test]
-    fn mcp_x_key_toggles_current_app() {
+    fn mcp_space_key_toggles_current_app() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(
+            action,
+            Action::McpToggle {
+                id,
+                enabled: true
+            } if id == "m1"
+        ));
+    }
+
+    #[test]
+    fn mcp_x_key_does_not_toggle_current_app() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Mcp;
         app.focus = Focus::Content;
@@ -1985,13 +2175,7 @@ mod tests {
         });
 
         let action = app.on_key(key(KeyCode::Char('x')), &data);
-        assert!(matches!(
-            action,
-            Action::McpToggle {
-                id,
-                enabled: true
-            } if id == "m1"
-        ));
+        assert!(matches!(action, Action::None));
     }
 
     #[test]
@@ -2055,7 +2239,44 @@ mod tests {
     }
 
     #[test]
-    fn mcp_apps_picker_x_toggles_selected_app_and_enter_emits_action() {
+    fn mcp_apps_picker_space_toggles_selected_app_and_enter_emits_action() {
+        let mut app = App::new(Some(AppType::Codex));
+        app.route = Route::Mcp;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.mcp.rows.push(super::super::data::McpRow {
+            id: "m1".to_string(),
+            server: crate::app_config::McpServer {
+                id: "m1".to_string(),
+                name: "Server".to_string(),
+                server: json!({}),
+                apps: crate::app_config::McpApps::default(),
+                description: None,
+                homepage: None,
+                docs: None,
+                tags: vec![],
+            },
+        });
+
+        app.on_key(key(KeyCode::Char('m')), &data);
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::McpAppsPicker { apps, .. } if apps.codex
+        ));
+
+        let action = app.on_key(key(KeyCode::Enter), &data);
+        assert!(matches!(
+            action,
+            Action::McpSetApps { id, apps } if id == "m1" && apps.codex && !apps.claude && !apps.gemini
+        ));
+    }
+
+    #[test]
+    fn mcp_apps_picker_x_does_not_toggle_selected_app() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Mcp;
         app.focus = Focus::Content;
@@ -2081,13 +2302,7 @@ mod tests {
         assert!(matches!(action, Action::None));
         assert!(matches!(
             &app.overlay,
-            Overlay::McpAppsPicker { apps, .. } if apps.codex
-        ));
-
-        let action = app.on_key(key(KeyCode::Enter), &data);
-        assert!(matches!(
-            action,
-            Action::McpSetApps { id, apps } if id == "m1" && apps.codex && !apps.claude && !apps.gemini
+            Overlay::McpAppsPicker { apps, .. } if !apps.codex
         ));
     }
 
@@ -2117,7 +2332,7 @@ mod tests {
         app.on_key(key(KeyCode::Down), &data);
         app.on_key(key(KeyCode::Down), &data);
 
-        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(action, Action::None));
         assert!(matches!(
             &app.overlay,
@@ -2160,7 +2375,7 @@ mod tests {
             Overlay::McpAppsPicker { selected, .. } if *selected == 3
         ));
 
-        let action = app.on_key(key(KeyCode::Char('x')), &data);
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(action, Action::None));
         assert!(matches!(
             &app.overlay,
@@ -7863,7 +8078,7 @@ mod tests {
         };
 
         let data = UiData::default();
-        let toggle_action = app.on_key(key(KeyCode::Char('x')), &data);
+        let toggle_action = app.on_key(key(KeyCode::Char(' ')), &data);
         assert!(matches!(toggle_action, Action::None));
 
         let action = app.on_key(key(KeyCode::Enter), &data);
@@ -7884,6 +8099,41 @@ mod tests {
                 kind: ToastKind::Warning,
                 ..
             }) if message == texts::tui_toast_visible_apps_zero_selection_warning()
+        ));
+    }
+
+    #[test]
+    #[serial(home_settings)]
+    fn visible_apps_picker_x_key_does_not_toggle_selection() {
+        let temp_home = TempDir::new().expect("create temp home");
+        let _env = EnvGuard::set_home(temp_home.path());
+        crate::settings::set_visible_apps(crate::settings::VisibleApps {
+            claude: true,
+            codex: false,
+            gemini: false,
+            opencode: false,
+            openclaw: false,
+        })
+        .expect("save visible apps");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Settings;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::VisibleAppsPicker {
+            selected: 0,
+            apps: crate::settings::get_visible_apps(),
+        };
+
+        let action = app.on_key(key(KeyCode::Char('x')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::VisibleAppsPicker { apps, .. }
+                if apps.claude
+                    && !apps.codex
+                    && !apps.gemini
+                    && !apps.opencode
+                    && !apps.openclaw
         ));
     }
 

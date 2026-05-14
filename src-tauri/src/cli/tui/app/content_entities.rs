@@ -289,7 +289,7 @@ impl App {
                 self.open_mcp_edit_form(row);
                 Action::None
             }
-            KeyCode::Char('x') => {
+            KeyCode::Char(' ') => {
                 let Some(row) = visible.get(self.mcp_idx) else {
                     return Action::None;
                 };

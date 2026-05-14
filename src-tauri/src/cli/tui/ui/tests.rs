@@ -915,6 +915,31 @@ fn zero_selection_warning_toast_renders_after_picker_rejection() {
 }
 
 #[test]
+fn visible_apps_picker_uses_space_toggle_key() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Settings;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::VisibleAppsPicker {
+        selected: 0,
+        apps: crate::settings::VisibleApps {
+            claude: true,
+            codex: false,
+            gemini: false,
+            opencode: false,
+            openclaw: false,
+        },
+    };
+
+    let all = all_text(&render(&app, &minimal_data(&app.app_type)));
+
+    assert!(all.contains("Space=toggle"), "{all}");
+    assert!(!all.contains("x=toggle"), "{all}");
+}
+
+#[test]
 fn openclaw_agents_picker_overlay_marks_current_option_when_editing_existing_fallback() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::Chinese);
@@ -2407,6 +2432,23 @@ fn mcp_page_key_bar_hides_validate_action() {
 
     assert!(!all.contains("validate"));
     assert!(!all.contains("校验"));
+}
+
+#[test]
+fn mcp_page_uses_space_toggle_key() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Mcp;
+    app.focus = Focus::Content;
+
+    let data = minimal_data(&app.app_type);
+    let buf = render(&app, &data);
+    let all = all_text(&buf);
+
+    assert!(all.contains("Space=toggle"), "{all}");
+    assert!(!all.contains("x=toggle"), "{all}");
 }
 
 #[test]
