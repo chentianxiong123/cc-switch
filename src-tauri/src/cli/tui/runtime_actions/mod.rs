@@ -283,6 +283,7 @@ pub(crate) fn handle_action(
         }
         Action::ConfirmCommonConfigNotice => {
             ctx.app.common_config_notice_confirmed = true;
+            crate::settings::set_common_config_confirmed(true)?;
             Ok(())
         }
         Action::ConfigWebDavCheckConnection => config::webdav_check_connection(&mut ctx),
@@ -464,6 +465,28 @@ mod tests {
         fs::create_dir_all(&config_dir).expect("create config dir");
         fs::write(config_dir.join("config.json"), "{ not valid json }")
             .expect("write invalid legacy config");
+    }
+
+    #[test]
+    #[serial(home_settings)]
+    fn confirm_common_config_notice_persists_setting() {
+        let temp_home = TempDir::new().expect("create temp home");
+        let _env = EnvGuard::set_home(temp_home.path());
+        assert!(!crate::settings::get_common_config_confirmed());
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.common_config_notice_confirmed = false;
+        let mut data = UiData::default();
+
+        run_action(&mut app, &mut data, Action::ConfirmCommonConfigNotice)
+            .expect("confirm common config notice");
+
+        assert!(app.common_config_notice_confirmed);
+        assert!(crate::settings::get_common_config_confirmed());
+        assert_eq!(
+            crate::settings::get_settings().common_config_confirmed,
+            Some(true)
+        );
     }
 
     #[test]

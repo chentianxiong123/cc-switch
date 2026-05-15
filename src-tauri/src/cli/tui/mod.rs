@@ -71,7 +71,8 @@ where
     F: FnOnce(&AppType) -> Result<data::UiData, AppError>,
 {
     let app_type = resolve_initial_app_type(app_override);
-    let app = App::new(Some(app_type));
+    let mut app = App::new(Some(app_type));
+    app.common_config_notice_confirmed = crate::settings::get_common_config_confirmed();
     let data = load_data(&app.app_type)?;
     Ok((app, data))
 }
@@ -209,7 +210,6 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
     let _panic_hook = PanicRestoreHookGuard::install();
     let mut terminal = TuiTerminal::new()?;
     let (mut app, mut data) = initialize_app_state_with(app_override, data::UiData::load)?;
-    app.common_config_notice_confirmed = false;
     let mut proxy_open_flash = ProxyOpenFlash::default();
     app.reset_proxy_activity(
         data.proxy.estimated_input_tokens_total,
