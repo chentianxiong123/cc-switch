@@ -213,10 +213,6 @@ pub enum Action {
     SetOpenClawConfigDir {
         path: Option<String>,
     },
-    SetProxyTakeover {
-        app_type: AppType,
-        enabled: bool,
-    },
     SetManagedProxyForCurrentApp {
         app_type: AppType,
         enabled: bool,

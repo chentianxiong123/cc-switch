@@ -134,22 +134,13 @@ pub struct TextViewState {
 
 #[derive(Debug, Clone)]
 pub enum TextViewAction {
-    ProxyToggleTakeover { app_type: AppType, enabled: bool },
+    ProxyToggleManagedRoute,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommonSnippetViewSource {
     Global,
     ProviderForm,
-}
-
-impl TextViewAction {
-    pub fn key_label(&self) -> &'static str {
-        match self {
-            TextViewAction::ProxyToggleTakeover { enabled: true, .. } => texts::tui_key_takeover(),
-            TextViewAction::ProxyToggleTakeover { enabled: false, .. } => texts::tui_key_restore(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
