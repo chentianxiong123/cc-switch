@@ -52,23 +52,25 @@ impl NavItem {
         NavItem::Exit,
     ];
 
-    pub const OPENCLAW_ALL: [NavItem; 8] = [
+    pub const OPENCLAW_ALL: [NavItem; 9] = [
         NavItem::Main,
         NavItem::Providers,
         NavItem::OpenClawWorkspace,
         NavItem::OpenClawEnv,
         NavItem::OpenClawTools,
         NavItem::OpenClawAgents,
+        NavItem::Config,
         NavItem::Settings,
         NavItem::Exit,
     ];
 
-    pub const HERMES_ALL: [NavItem; 7] = [
+    pub const HERMES_ALL: [NavItem; 8] = [
         NavItem::Main,
         NavItem::Providers,
         NavItem::Skills,
         NavItem::HermesMemory,
         NavItem::Mcp,
+        NavItem::Config,
         NavItem::Settings,
         NavItem::Exit,
     ];
@@ -126,8 +128,18 @@ mod tests {
         assert!(NavItem::HERMES_ALL
             .iter()
             .any(|item| matches!(item, NavItem::HermesMemory)));
+        assert!(NavItem::HERMES_ALL
+            .iter()
+            .any(|item| matches!(item, NavItem::Config)));
         assert!(!NavItem::HERMES_ALL
             .iter()
             .any(|item| matches!(item, NavItem::Prompts)));
+    }
+
+    #[test]
+    fn openclaw_nav_keeps_generic_config_entry() {
+        assert!(NavItem::OPENCLAW_ALL
+            .iter()
+            .any(|item| matches!(item, NavItem::Config)));
     }
 }

@@ -4702,6 +4702,21 @@ mod tests {
     }
 
     #[test]
+    fn hermes_and_openclaw_nav_config_enter_opens_config_panel() {
+        for app_type in [AppType::Hermes, AppType::OpenClaw] {
+            let mut app = App::new(Some(app_type));
+            app.focus = Focus::Nav;
+            app.nav_idx = nav_index(&app, NavItem::Config);
+
+            let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+
+            assert!(matches!(action, Action::SwitchRoute(Route::Config)));
+            assert_eq!(app.route, Route::Config);
+            assert_eq!(app.route_stack, vec![Route::Main]);
+        }
+    }
+
+    #[test]
     fn openclaw_workspace_route_enter_opens_workspace_file() {
         let mut app = App::new(Some(AppType::OpenClaw));
         app.route = Route::ConfigOpenClawWorkspace;

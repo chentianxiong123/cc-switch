@@ -5297,6 +5297,7 @@ fn workspace_openclaw_nav_uses_app_specific_labels_and_hides_generic_entries() {
         NavItem::OpenClawEnv,
         NavItem::OpenClawTools,
         NavItem::OpenClawAgents,
+        NavItem::Config,
         NavItem::Settings,
         NavItem::Exit,
     ]
@@ -5310,7 +5311,7 @@ fn workspace_openclaw_nav_uses_app_specific_labels_and_hides_generic_entries() {
     assert!(!all.contains(&nav_label_text(NavItem::Mcp)), "{all}");
     assert!(!all.contains(&nav_label_text(NavItem::Skills)), "{all}");
     assert!(!all.contains(&nav_label_text(NavItem::Prompts)), "{all}");
-    assert!(!all.contains(&nav_label_text(NavItem::Config)), "{all}");
+    assert!(all.contains(&nav_label_text(NavItem::Config)), "{all}");
 }
 
 #[test]
