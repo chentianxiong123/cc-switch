@@ -67,6 +67,10 @@ impl App {
             language_idx: 0,
             settings_idx: 0,
             settings_proxy_idx: 0,
+            settings_managed_accounts_idx: 0,
+            managed_auth_status: None,
+            managed_auth_loading: false,
+            managed_auth_login: None,
         }
     }
 
@@ -123,7 +127,9 @@ impl App {
             | Route::SkillsDiscover
             | Route::SkillsRepos
             | Route::SkillDetail { .. } => NavItem::Skills,
-            Route::Settings | Route::SettingsProxy => NavItem::Settings,
+            Route::Settings | Route::SettingsProxy | Route::SettingsManagedAccounts => {
+                NavItem::Settings
+            }
         }
     }
 
@@ -209,6 +215,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        self.expire_managed_auth_login_if_needed();
         if let Some(toast) = &mut self.toast {
             if toast.remaining_ticks > 0 {
                 toast.remaining_ticks -= 1;
@@ -222,6 +229,37 @@ impl App {
             if self.tick.saturating_sub(transition.started_tick) >= PROXY_HERO_TRANSITION_TICKS {
                 self.proxy_visual_transition = None;
             }
+        }
+    }
+
+    fn expire_managed_auth_login_if_needed(&mut self) {
+        let Some(login) = self.managed_auth_login.as_ref() else {
+            return;
+        };
+        if self.tick < login.expires_at_tick {
+            return;
+        }
+
+        self.managed_auth_login = None;
+        self.managed_auth_loading = false;
+        self.push_toast(
+            texts::tui_toast_managed_auth_login_expired(),
+            ToastKind::Warning,
+        );
+    }
+
+    pub(crate) fn should_poll_managed_auth_login(&self) -> bool {
+        self.managed_auth_login.as_ref().is_some_and(|login| {
+            self.tick < login.expires_at_tick && self.tick >= login.next_poll_tick
+        })
+    }
+
+    pub(crate) fn clear_codex_oauth_binding_if_removed(&mut self, account_id: &str) {
+        let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+            return;
+        };
+        if provider.codex_oauth_account_id.as_deref() == Some(account_id) {
+            provider.set_codex_oauth_account_id(None);
         }
     }
 
@@ -569,6 +607,7 @@ impl App {
             Route::SkillDetail { directory } => self.on_skill_detail_key(key, data, &directory),
             Route::Settings => self.on_settings_key(key, data),
             Route::SettingsProxy => self.on_settings_proxy_key(key, data),
+            Route::SettingsManagedAccounts => self.on_settings_managed_accounts_key(key, data),
             Route::Main => match key.code {
                 KeyCode::Char('r') => Action::LocalEnvRefresh,
                 KeyCode::Char('p') | KeyCode::Char('P') => self.main_proxy_action(data),

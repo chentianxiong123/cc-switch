@@ -104,8 +104,25 @@ pub enum Action {
     ProviderModelFetch {
         base_url: String,
         api_key: Option<String>,
+        codex_oauth: bool,
+        codex_oauth_account_id: Option<String>,
         field: ProviderAddField,
         claude_idx: Option<usize>,
+    },
+
+    ManagedAuthRefresh {
+        auth_provider: String,
+    },
+    ManagedAuthStartLogin {
+        auth_provider: String,
+    },
+    ManagedAuthSetDefault {
+        auth_provider: String,
+        account_id: String,
+    },
+    ManagedAuthRemove {
+        auth_provider: String,
+        account_id: String,
     },
 
     McpToggle {
@@ -409,6 +426,7 @@ pub enum SettingsItem {
     VisibleAppsMode,
     VisibleApps,
     OpenClawConfigDir,
+    ManagedAccounts,
     SkipClaudeOnboarding,
     ClaudePluginIntegration,
     Proxy,
@@ -416,7 +434,8 @@ pub enum SettingsItem {
 }
 
 impl SettingsItem {
-    pub const ALL: [SettingsItem; 8] = [
+    pub const ALL: [SettingsItem; 9] = [
+        SettingsItem::ManagedAccounts,
         SettingsItem::Language,
         SettingsItem::VisibleAppsMode,
         SettingsItem::VisibleApps,
@@ -550,4 +569,8 @@ pub struct App {
     pub language_idx: usize,
     pub settings_idx: usize,
     pub settings_proxy_idx: usize,
+    pub settings_managed_accounts_idx: usize,
+    pub managed_auth_status: Option<crate::services::ManagedAuthStatus>,
+    pub managed_auth_loading: bool,
+    pub managed_auth_login: Option<ManagedAuthLoginState>,
 }

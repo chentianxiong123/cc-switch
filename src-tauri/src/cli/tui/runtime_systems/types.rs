@@ -174,6 +174,53 @@ pub(crate) enum WebDavMsg {
     },
 }
 
+pub(crate) enum ManagedAuthReq {
+    Refresh {
+        auth_provider: String,
+    },
+    StartLogin {
+        auth_provider: String,
+    },
+    PollLogin {
+        auth_provider: String,
+        device_code: String,
+    },
+    SetDefault {
+        auth_provider: String,
+        account_id: String,
+    },
+    Remove {
+        auth_provider: String,
+        account_id: String,
+    },
+}
+
+pub(crate) enum ManagedAuthMsg {
+    Status {
+        auth_provider: String,
+        result: Result<crate::services::ManagedAuthStatus, String>,
+    },
+    LoginStarted {
+        auth_provider: String,
+        result: Result<crate::services::ManagedAuthDeviceCodeResponse, String>,
+    },
+    LoginPolled {
+        auth_provider: String,
+        device_code: String,
+        result: Result<Option<crate::services::ManagedAuthAccount>, String>,
+    },
+    DefaultSet {
+        auth_provider: String,
+        account_id: String,
+        result: Result<crate::services::ManagedAuthStatus, String>,
+    },
+    Removed {
+        auth_provider: String,
+        account_id: String,
+        result: Result<crate::services::ManagedAuthStatus, String>,
+    },
+}
+
 pub(crate) struct SpeedtestSystem {
     pub(crate) req_tx: mpsc::Sender<String>,
     pub(crate) result_rx: mpsc::Receiver<SpeedtestMsg>,
@@ -240,6 +287,12 @@ pub(crate) struct WebDavSystem {
     pub(crate) _handle: std::thread::JoinHandle<()>,
 }
 
+pub(crate) struct ManagedAuthSystem {
+    pub(crate) req_tx: mpsc::Sender<ManagedAuthReq>,
+    pub(crate) result_rx: mpsc::Receiver<ManagedAuthMsg>,
+    pub(crate) _handle: std::thread::JoinHandle<()>,
+}
+
 pub(crate) enum UpdateReq {
     Check { request_id: u64 },
     Download,
@@ -268,6 +321,8 @@ pub(crate) enum ModelFetchReq {
         request_id: u64,
         base_url: String,
         api_key: Option<String>,
+        codex_oauth: bool,
+        codex_oauth_account_id: Option<String>,
         field: ProviderAddField,
         claude_idx: Option<usize>,
     },

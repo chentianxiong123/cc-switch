@@ -1136,6 +1136,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(
@@ -1185,6 +1186,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::format_common_snippet(&mut ctx, AppType::Claude).expect("format common snippet");
@@ -1249,6 +1251,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::extract_common_snippet_into_editor(&mut ctx, AppType::Claude)
@@ -1285,6 +1288,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_prompt_create(
@@ -1337,6 +1341,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_add(
@@ -1378,6 +1383,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_add(
@@ -1422,6 +1428,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_add(
@@ -1486,6 +1493,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_add(
@@ -1573,6 +1581,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_edit(
@@ -1655,6 +1664,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_edit(
@@ -1753,6 +1763,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_edit(
@@ -1932,6 +1943,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_edit(
@@ -2061,6 +2073,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, submit, content)?;
@@ -2109,6 +2122,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, EditorSubmit::ConfigOpenClawTools, content)?;
@@ -2155,6 +2169,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, EditorSubmit::ConfigOpenClawTools, content)?;
@@ -2202,6 +2217,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, EditorSubmit::ConfigOpenClawAgents, content)?;
@@ -2248,6 +2264,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, EditorSubmit::ConfigOpenClawAgents, content)?;
@@ -2610,6 +2627,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         super::submit(&mut ctx, EditorSubmit::ConfigOpenClawAgents, content)
@@ -2664,6 +2682,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_form_apply_json(
@@ -2757,6 +2776,7 @@ mod tests {
             update_req_tx: None,
             update_check: &mut fixture.update_check,
             model_fetch_req_tx: None,
+            managed_auth_req_tx: None,
         };
 
         submit_provider_form_apply_json(

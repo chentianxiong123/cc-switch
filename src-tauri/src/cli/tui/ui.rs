@@ -169,6 +169,9 @@ fn render_content(
         }
         Route::Settings => render_settings(frame, app, data, content_area, theme),
         Route::SettingsProxy => render_settings_proxy(frame, app, data, content_area, theme),
+        Route::SettingsManagedAccounts => {
+            render_settings_managed_accounts(frame, app, data, content_area, theme)
+        }
     }
 }
 

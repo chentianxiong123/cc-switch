@@ -273,6 +273,7 @@ pub struct ProxySnapshot {
     pub enabled: bool,
     pub running: bool,
     pub managed_runtime: bool,
+    pub active_worker_apps: HashSet<String>,
     pub auto_failover_enabled: bool,
     pub claude_takeover: bool,
     pub codex_takeover: bool,
@@ -1131,6 +1132,12 @@ fn load_proxy_snapshot(app_type: &AppType) -> Result<ProxySnapshot, AppError> {
             .map(|target| ProxyTargetSnapshot {
                 provider_name: target.provider_name.clone(),
             });
+        let active_worker_apps = runtime_status
+            .active_workers
+            .iter()
+            .map(|worker| worker.app_type.trim().to_ascii_lowercase())
+            .filter(|app| !app.is_empty())
+            .collect::<HashSet<_>>();
         let listen_address = if runtime_status.address.trim().is_empty() {
             config.listen_address.clone()
         } else {
@@ -1139,7 +1146,7 @@ fn load_proxy_snapshot(app_type: &AppType) -> Result<ProxySnapshot, AppError> {
         let listen_port = runtime_status
             .active_workers
             .iter()
-            .find(|worker| worker.app_type == current_app)
+            .find(|worker| worker.app_type.eq_ignore_ascii_case(&current_app))
             .map(|worker| worker.port)
             .or_else(|| (runtime_status.port != 0).then_some(runtime_status.port))
             .unwrap_or(configured_listen_port);
@@ -1156,6 +1163,7 @@ fn load_proxy_snapshot(app_type: &AppType) -> Result<ProxySnapshot, AppError> {
             running: runtime_status.running,
             managed_runtime: runtime_status.managed_session_token.is_some()
                 || !runtime_status.active_workers.is_empty(),
+            active_worker_apps,
             auto_failover_enabled: app_proxy_config.auto_failover_enabled,
             claude_takeover: takeover.claude,
             codex_takeover: takeover.codex,
@@ -1661,10 +1669,39 @@ mod tests {
             Some(true)
         );
 
+        let managed_worker_active = ProxySnapshot {
+            running: true,
+            managed_runtime: true,
+            active_worker_apps: HashSet::from([AppType::Claude.as_str().to_string()]),
+            claude_takeover: false,
+            ..ProxySnapshot::default()
+        };
+        assert_eq!(
+            managed_worker_active.routes_current_app_through_proxy(&AppType::Claude),
+            Some(false)
+        );
+        assert_eq!(
+            managed_worker_active.routes_current_app_through_proxy(&AppType::Codex),
+            Some(false)
+        );
+
+        let worker_for_another_app = ProxySnapshot {
+            running: true,
+            managed_runtime: true,
+            active_worker_apps: HashSet::from([AppType::Codex.as_str().to_string()]),
+            claude_takeover: false,
+            ..ProxySnapshot::default()
+        };
+        assert_eq!(
+            worker_for_another_app.routes_current_app_through_proxy(&AppType::Claude),
+            Some(false)
+        );
+
         let stopped = ProxySnapshot {
             running: false,
             managed_runtime: true,
             claude_takeover: true,
+            active_worker_apps: HashSet::from([AppType::Claude.as_str().to_string()]),
             ..ProxySnapshot::default()
         };
         assert_eq!(

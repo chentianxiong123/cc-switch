@@ -22,6 +22,7 @@ pub enum Route {
     SkillDetail { directory: String },
     Settings,
     SettingsProxy,
+    SettingsManagedAccounts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

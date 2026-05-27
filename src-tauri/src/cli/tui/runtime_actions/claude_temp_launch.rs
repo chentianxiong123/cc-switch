@@ -168,6 +168,7 @@ mod tests {
                 update_req_tx: None,
                 update_check: &mut self.update_check,
                 model_fetch_req_tx: None,
+                managed_auth_req_tx: None,
             }
         }
     }

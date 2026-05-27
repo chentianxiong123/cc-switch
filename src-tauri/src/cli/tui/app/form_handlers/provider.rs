@@ -306,6 +306,34 @@ impl App {
                 provider.toggle_claude_hide_attribution();
                 Action::None
             }
+            ProviderAddField::CodexOAuthAccount => {
+                if matches!(key.code, KeyCode::Enter) {
+                    let selected = self
+                        .form
+                        .as_ref()
+                        .and_then(|form| match form {
+                            FormState::ProviderAdd(provider) => {
+                                Some(provider.codex_oauth_account_id.clone())
+                            }
+                            _ => None,
+                        })
+                        .flatten();
+                    self.overlay = Overlay::ManagedAccountPicker {
+                        auth_provider: "codex_oauth".to_string(),
+                        selected: 0,
+                        binding: true,
+                        selected_account_id: selected,
+                    };
+                }
+                Action::None
+            }
+            ProviderAddField::CodexFastMode => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return Action::None;
+                };
+                provider.toggle_codex_fast_mode();
+                Action::None
+            }
             ProviderAddField::OpenClawModels => {
                 if matches!(key.code, KeyCode::Enter) {
                     let Some(FormState::ProviderAdd(provider)) = self.form.as_ref() else {
@@ -591,6 +619,8 @@ impl App {
         Action::ProviderModelFetch {
             base_url: provider.hermes_base_url.value.clone(),
             api_key: Some(provider.hermes_api_key.value.clone()),
+            codex_oauth: false,
+            codex_oauth_account_id: None,
             field: ProviderAddField::HermesModels,
             claude_idx: None,
         }
@@ -631,6 +661,8 @@ impl App {
             Action::ProviderModelFetch {
                 base_url,
                 api_key,
+                codex_oauth: false,
+                codex_oauth_account_id: None,
                 field: selected,
                 claude_idx: None,
             }
@@ -888,6 +920,7 @@ fn usage_query_provider_credential_field(field: ProviderAddField) -> bool {
         field,
         ProviderAddField::ClaudeApiKey
             | ProviderAddField::ClaudeBaseUrl
+            | ProviderAddField::CodexOAuthAccount
             | ProviderAddField::CodexApiKey
             | ProviderAddField::CodexBaseUrl
             | ProviderAddField::GeminiApiKey

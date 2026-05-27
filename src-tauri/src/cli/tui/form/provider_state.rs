@@ -127,6 +127,8 @@ impl ProviderAddFormState {
             claude_opus_model: TextInput::new(""),
             claude_hide_attribution: false,
             claude_hide_attribution_touched: false,
+            codex_oauth_account_id: None,
+            codex_fast_mode: false,
             codex_base_url: TextInput::new(codex_defaults.0),
             codex_model: TextInput::new(codex_defaults.1),
             codex_wire_api: codex_defaults.2,
@@ -300,7 +302,11 @@ impl ProviderAddFormState {
 
         match self.app_type {
             AppType::Claude => {
-                if !self.is_claude_official_provider() {
+                if self.is_claude_codex_oauth_provider() {
+                    fields.push(ProviderAddField::CodexOAuthAccount);
+                    fields.push(ProviderAddField::CodexFastMode);
+                    fields.push(ProviderAddField::ClaudeModelConfig);
+                } else if !self.is_claude_official_provider() {
                     fields.push(ProviderAddField::ClaudeBaseUrl);
                     fields.push(ProviderAddField::ClaudeApiFormat);
                     fields.push(ProviderAddField::ClaudeApiKey);
@@ -449,7 +455,9 @@ impl ProviderAddFormState {
             ProviderAddField::HermesApiKey => Some(&self.hermes_api_key),
             ProviderAddField::HermesBaseUrl => Some(&self.hermes_base_url),
             ProviderAddField::HermesRateLimitDelay => Some(&self.hermes_rate_limit_delay),
-            ProviderAddField::CodexWireApi
+            ProviderAddField::CodexOAuthAccount
+            | ProviderAddField::CodexFastMode
+            | ProviderAddField::CodexWireApi
             | ProviderAddField::CodexRequiresOpenaiAuth
             | ProviderAddField::ClaudeApiFormat
             | ProviderAddField::ClaudeModelConfig
@@ -498,7 +506,9 @@ impl ProviderAddFormState {
             ProviderAddField::HermesApiKey => Some(&mut self.hermes_api_key),
             ProviderAddField::HermesBaseUrl => Some(&mut self.hermes_base_url),
             ProviderAddField::HermesRateLimitDelay => Some(&mut self.hermes_rate_limit_delay),
-            ProviderAddField::CodexWireApi
+            ProviderAddField::CodexOAuthAccount
+            | ProviderAddField::CodexFastMode
+            | ProviderAddField::CodexWireApi
             | ProviderAddField::CodexRequiresOpenaiAuth
             | ProviderAddField::ClaudeApiFormat
             | ProviderAddField::ClaudeModelConfig
@@ -927,6 +937,10 @@ impl ProviderAddFormState {
     }
 
     pub fn current_provider_base_url(&self) -> String {
+        if self.is_claude_codex_oauth_provider() {
+            return "https://chatgpt.com/backend-api/codex".to_string();
+        }
+
         match self.app_type {
             AppType::Claude => self.claude_base_url.value.clone(),
             AppType::Codex => self.codex_base_url.value.clone(),
@@ -937,6 +951,13 @@ impl ProviderAddFormState {
     }
 
     fn usage_query_provider_credentials(&self) -> (String, String) {
+        if self.is_claude_codex_oauth_provider() {
+            return (
+                String::new(),
+                "https://chatgpt.com/backend-api/codex".to_string(),
+            );
+        }
+
         let (api_key, base_url) = match self.app_type {
             AppType::Claude => (&self.claude_api_key.value, &self.claude_base_url.value),
             AppType::Codex => (&self.codex_api_key.value, &self.codex_base_url.value),
@@ -1015,6 +1036,36 @@ impl ProviderAddFormState {
     pub fn toggle_claude_hide_attribution(&mut self) {
         self.claude_hide_attribution = !self.claude_hide_attribution;
         self.claude_hide_attribution_touched = true;
+    }
+
+    pub fn toggle_codex_fast_mode(&mut self) {
+        if self.is_claude_codex_oauth_provider() {
+            self.codex_fast_mode = !self.codex_fast_mode;
+        }
+    }
+
+    pub fn set_codex_oauth_account_id(&mut self, account_id: Option<String>) {
+        self.codex_oauth_account_id = account_id
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    }
+
+    pub fn codex_oauth_account_display(&self) -> String {
+        self.codex_oauth_account_id
+            .clone()
+            .unwrap_or_else(|| texts::tui_managed_accounts_follow_default().to_string())
+    }
+
+    pub fn is_claude_codex_oauth_provider(&self) -> bool {
+        if !matches!(self.app_type, AppType::Claude) {
+            return false;
+        }
+
+        self.extra
+            .get("meta")
+            .and_then(|meta| meta.get("providerType"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|value| value == "codex_oauth")
     }
 
     pub fn is_claude_official_provider(&self) -> bool {

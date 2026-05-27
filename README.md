@@ -495,6 +495,52 @@ This is usually caused by **environment variable conflicts**. If you have API ke
 </details>
 
 <details>
+<summary><b>Proxy startup fails with `Address already in use`. What should I do?</b></summary>
+
+<br>
+
+This means another process is already listening on the proxy port. A common case after upgrading or debugging is that an old `cc-switch daemon` / `cc-switch proxy serve` process is still running in the background, but the new process did not attach to it.
+
+First check the current proxy port with `cc-switch proxy show`, for example `configured 15722`.
+
+**macOS / Linux:**
+
+```bash
+# See which process owns the port. Replace 15722 with your proxy port.
+lsof -nP -iTCP:15722 -sTCP:LISTEN
+
+# List cc-switch processes and identify the daemon / proxy worker.
+ps -axo pid,ppid,stat,command | grep '[c]c-switch'
+
+# If the daemon is reachable, stop it cleanly first.
+cc-switch daemon stop
+
+# If the daemon is not reachable but the port is still occupied, terminate the matching PIDs.
+kill <worker-pid> <daemon-pid>
+
+# If they still do not exit, force terminate them.
+kill -9 <worker-pid> <daemon-pid>
+```
+
+Only terminate processes that are clearly shown as `cc-switch daemon start` or `cc-switch proxy serve`. Do not kill unrelated apps just because they use a nearby port.
+
+**Windows:**
+
+```powershell
+netstat -ano | findstr :15722
+taskkill /PID <pid> /F
+```
+
+Then restart:
+
+```bash
+cc-switch proxy show
+cc-switch
+```
+
+</details>
+
+<details>
 <summary><b>Which apps are supported?</b></summary>
 
 <br>

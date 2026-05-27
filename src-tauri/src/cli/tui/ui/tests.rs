@@ -795,6 +795,33 @@ pub(super) fn minimal_data(_app_type: &AppType) -> UiData {
     }
 }
 
+fn managed_auth_status() -> crate::services::ManagedAuthStatus {
+    crate::services::ManagedAuthStatus {
+        provider: "codex_oauth".to_string(),
+        authenticated: true,
+        default_account_id: Some("acc-default".to_string()),
+        migration_error: None,
+        accounts: vec![
+            crate::services::ManagedAuthAccount {
+                id: "acc-default".to_string(),
+                provider: "codex_oauth".to_string(),
+                login: "default@example.com".to_string(),
+                avatar_url: None,
+                authenticated_at: 1,
+                is_default: true,
+            },
+            crate::services::ManagedAuthAccount {
+                id: "acc-alt".to_string(),
+                provider: "codex_oauth".to_string(),
+                login: "alt@example.com".to_string(),
+                avatar_url: None,
+                authenticated_at: 2,
+                is_default: false,
+            },
+        ],
+    }
+}
+
 fn failover_provider_row(
     id: &str,
     name: &str,
@@ -1259,6 +1286,95 @@ fn settings_page_shows_openclaw_config_dir_override_value() {
         "{all}"
     );
     assert!(all.contains(r"\\wsl$\Ubuntu\home\demo\.openclaw"), "{all}");
+}
+
+#[test]
+fn settings_page_shows_managed_accounts_summary() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Settings;
+    app.focus = Focus::Content;
+    app.managed_auth_status = Some(managed_auth_status());
+
+    let all = all_text(&render(&app, &minimal_data(&app.app_type)));
+
+    assert!(
+        all.contains(texts::tui_settings_managed_accounts_title()),
+        "{all}"
+    );
+    assert!(all.contains("default@example.com"), "{all}");
+}
+
+#[test]
+fn settings_managed_accounts_page_renders_chatgpt_left_and_details_right() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::SettingsManagedAccounts;
+    app.focus = Focus::Content;
+    app.managed_auth_status = Some(managed_auth_status());
+
+    let all = all_text(&render(&app, &minimal_data(&app.app_type)));
+
+    assert!(
+        all.contains(texts::tui_settings_managed_accounts_title()),
+        "{all}"
+    );
+    assert!(
+        all.contains(texts::tui_managed_accounts_provider_column()),
+        "{all}"
+    );
+    assert!(
+        all.contains(texts::tui_managed_accounts_chatgpt_provider()),
+        "{all}"
+    );
+    assert!(
+        all.contains(texts::tui_managed_accounts_details_title()),
+        "{all}"
+    );
+    assert!(
+        all.contains(texts::tui_managed_accounts_authenticated()),
+        "{all}"
+    );
+    assert!(all.contains("default@example.com"), "{all}");
+    assert!(!all.contains("alt@example.com"), "{all}");
+    assert!(all.contains("acc-default"), "{all}");
+    assert!(all.contains(texts::tui_managed_accounts_default()), "{all}");
+    assert!(
+        all.contains(texts::tui_managed_accounts_login_idle()),
+        "{all}"
+    );
+}
+
+#[test]
+fn managed_account_binding_picker_renders_follow_default_and_accounts() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.managed_auth_status = Some(managed_auth_status());
+    app.overlay = Overlay::ManagedAccountPicker {
+        auth_provider: "codex_oauth".to_string(),
+        selected: 0,
+        binding: true,
+        selected_account_id: None,
+    };
+
+    let all = all_text(&render(&app, &minimal_data(&app.app_type)));
+
+    assert!(all.contains(texts::tui_label_chatgpt_account()), "{all}");
+    assert!(
+        all.contains(texts::tui_managed_accounts_follow_default()),
+        "{all}"
+    );
+    assert!(all.contains("default@example.com"), "{all}");
+    assert!(all.contains("alt@example.com"), "{all}");
 }
 
 #[test]
@@ -2284,6 +2400,40 @@ fn home_proxy_dashboard_keeps_current_app_off_semantics_when_another_app_is_acti
     assert!(!all.contains("Proxy Dashboard"), "{all}");
     assert!(!all.contains("Shared runtime ready"), "{all}");
     assert!(!all.contains("x1.00"), "{all}");
+}
+
+#[test]
+fn home_proxy_dashboard_stays_off_for_current_worker_without_takeover() {
+    let _lock = lock_env();
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.tick = 1;
+    app.route = Route::Main;
+    app.focus = Focus::Content;
+
+    let mut data = minimal_data(&app.app_type);
+    data.proxy.running = true;
+    data.proxy.managed_runtime = true;
+    data.proxy.active_worker_apps =
+        std::collections::HashSet::from([AppType::Claude.as_str().to_string()]);
+    data.proxy.claude_takeover = false;
+    data.proxy.codex_takeover = false;
+    data.proxy.listen_address = "127.0.0.1".to_string();
+    data.proxy.listen_port = 15721;
+
+    let buf = render(&app, &data);
+    let all = all_text(&buf);
+    let header = line_at(&buf, 1);
+    let footer = line_at(&buf, buf.area.height - 1);
+
+    assert!(
+        header.contains(&texts::tui_header_proxy_status(false)),
+        "{header}"
+    );
+    assert!(footer.contains("proxy on"), "{footer}");
+    assert!(!all.contains("Proxy Dashboard"), "{all}");
+    assert!(all.contains("___  ___"), "{all}");
 }
 
 #[test]

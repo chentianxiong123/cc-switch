@@ -41,12 +41,13 @@ use runtime_systems::{
 };
 pub(crate) use runtime_systems::{fetch_provider_models_for_tui, ModelFetchStrategy};
 use runtime_systems::{
-    handle_local_env_msg, handle_model_fetch_msg, handle_proxy_msg, handle_quota_msg,
-    handle_session_msg, handle_skills_msg, handle_speedtest_msg, handle_stream_check_msg,
-    handle_update_msg, handle_webdav_msg, start_local_env_system, start_model_fetch_system,
-    start_proxy_system, start_quota_system, start_session_system, start_skills_system,
-    start_speedtest_system, start_stream_check_system, start_update_system, start_webdav_system,
-    LocalEnvReq, QuotaReq, RequestTracker,
+    handle_local_env_msg, handle_managed_auth_msg, handle_model_fetch_msg, handle_proxy_msg,
+    handle_quota_msg, handle_session_msg, handle_skills_msg, handle_speedtest_msg,
+    handle_stream_check_msg, handle_update_msg, handle_webdav_msg, start_local_env_system,
+    start_managed_auth_system, start_model_fetch_system, start_proxy_system, start_quota_system,
+    start_session_system, start_skills_system, start_speedtest_system, start_stream_check_system,
+    start_update_system, start_webdav_system, LocalEnvReq, ManagedAuthReq, QuotaReq,
+    RequestTracker,
 };
 use terminal::{PanicRestoreHookGuard, TuiTerminal};
 
@@ -210,6 +211,32 @@ fn queue_current_quota_refresh_if_due(
         app.quota_auto_target_key = Some(target_key);
         app.quota_last_auto_tick = Some(app.tick);
         queue_quota_refresh(app, data, quota_req_tx, target, false);
+    }
+}
+
+fn queue_managed_auth_refresh(
+    app: &mut App,
+    managed_auth_req_tx: Option<&mpsc::Sender<ManagedAuthReq>>,
+    auth_provider: &str,
+) {
+    let Some(tx) = managed_auth_req_tx else {
+        app.managed_auth_loading = false;
+        app.push_toast(
+            texts::tui_toast_managed_auth_worker_unavailable("auth worker is not running"),
+            ToastKind::Warning,
+        );
+        return;
+    };
+
+    app.managed_auth_loading = true;
+    if let Err(error) = tx.send(ManagedAuthReq::Refresh {
+        auth_provider: auth_provider.to_string(),
+    }) {
+        app.managed_auth_loading = false;
+        app.push_toast(
+            texts::tui_toast_managed_auth_request_failed(&error.to_string()),
+            ToastKind::Warning,
+        );
     }
 }
 
@@ -408,6 +435,21 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
         }
     };
 
+    let managed_auth = match start_managed_auth_system() {
+        Ok(system) => {
+            queue_managed_auth_refresh(&mut app, Some(&system.req_tx), "codex_oauth");
+            Some(system)
+        }
+        Err(err) => {
+            app.managed_auth_loading = false;
+            app.push_toast(
+                texts::tui_toast_managed_auth_worker_unavailable(&err.to_string()),
+                ToastKind::Warning,
+            );
+            None
+        }
+    };
+
     loop {
         app.last_size = terminal.size()?;
         app.observe_proxy_visual_state(&data);
@@ -488,6 +530,29 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
             }
         }
 
+        if let Some(auth) = managed_auth.as_ref() {
+            while let Ok(msg) = auth.result_rx.try_recv() {
+                handle_managed_auth_msg(&mut app, msg);
+            }
+        }
+
+        if app.should_poll_managed_auth_login() {
+            if let Some(login) = app.managed_auth_login.as_mut() {
+                login.next_poll_tick = app.tick.saturating_add(login.poll_interval_ticks.max(1));
+                if let Some(auth) = managed_auth.as_ref() {
+                    if let Err(err) = auth.req_tx.send(ManagedAuthReq::PollLogin {
+                        auth_provider: login.auth_provider.clone(),
+                        device_code: login.device_code.clone(),
+                    }) {
+                        app.push_toast(
+                            texts::tui_toast_managed_auth_request_failed(&err.to_string()),
+                            ToastKind::Warning,
+                        );
+                    }
+                }
+            }
+        }
+
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout).map_err(|e| AppError::Message(e.to_string()))? {
             match event::read().map_err(|e| AppError::Message(e.to_string()))? {
@@ -517,6 +582,7 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                         update_system.as_ref().map(|s| &s.req_tx),
                         &mut update_check,
                         model_fetch.as_ref().map(|s| &s.req_tx),
+                        managed_auth.as_ref().map(|s| &s.req_tx),
                         action,
                     ) {
                         if matches!(
@@ -560,6 +626,7 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
                             update_system.as_ref().map(|s| &s.req_tx),
                             &mut update_check,
                             model_fetch.as_ref().map(|s| &s.req_tx),
+                            managed_auth.as_ref().map(|s| &s.req_tx),
                             action,
                         ) {
                             if matches!(

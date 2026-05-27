@@ -13,7 +13,7 @@ mod tests {
 
     use crate::cli::i18n::{texts, use_test_language, Language};
     use crate::cli::tui::data::ProviderRow;
-    use crate::cli::tui::form::{McpEnvVarRow, McpTransport, TextInput};
+    use crate::cli::tui::form::{McpEnvVarRow, McpTransport, ProviderAddFormState, TextInput};
     use crate::cli::tui::runtime_actions::{
         handle_action, run_external_editor_for_prompt_form_content,
     };
@@ -112,6 +112,44 @@ mod tests {
 
     fn data() -> UiData {
         UiData::default()
+    }
+
+    fn managed_auth_status() -> crate::services::ManagedAuthStatus {
+        crate::services::ManagedAuthStatus {
+            provider: "codex_oauth".to_string(),
+            authenticated: true,
+            default_account_id: Some("acc-default".to_string()),
+            migration_error: None,
+            accounts: vec![
+                crate::services::ManagedAuthAccount {
+                    id: "acc-default".to_string(),
+                    provider: "codex_oauth".to_string(),
+                    login: "default@example.com".to_string(),
+                    avatar_url: None,
+                    authenticated_at: 1,
+                    is_default: true,
+                },
+                crate::services::ManagedAuthAccount {
+                    id: "acc-alt".to_string(),
+                    provider: "codex_oauth".to_string(),
+                    login: "alt@example.com".to_string(),
+                    avatar_url: None,
+                    authenticated_at: 2,
+                    is_default: false,
+                },
+            ],
+        }
+    }
+
+    fn claude_codex_oauth_form() -> ProviderAddFormState {
+        let mut form = ProviderAddFormState::new(AppType::Claude);
+        let idx = form
+            .template_labels()
+            .iter()
+            .position(|label| *label == "Codex")
+            .expect("Codex template should exist");
+        form.apply_template(idx, &[]);
+        form
     }
 
     #[test]
@@ -405,6 +443,7 @@ mod tests {
             &mut webdav_loading,
             None,
             &mut update_check,
+            None,
             None,
             action,
         )
@@ -1481,6 +1520,8 @@ mod tests {
             Action::ProviderModelFetch {
                 base_url,
                 api_key: Some(api_key),
+                codex_oauth: false,
+                codex_oauth_account_id: None,
                 field: ProviderAddField::HermesModels,
                 claude_idx: None,
             } if base_url == "https://api.example.com/v1" && api_key == "sk-hermes"
@@ -9068,6 +9109,83 @@ mod tests {
     }
 
     #[test]
+    fn settings_menu_exposes_managed_accounts_item() {
+        assert!(
+            matches!(
+                SettingsItem::ALL.first(),
+                Some(SettingsItem::ManagedAccounts)
+            ),
+            "Managed Accounts should be the first Settings entry"
+        );
+        assert!(
+            SettingsItem::ALL
+                .iter()
+                .any(|item| matches!(item, SettingsItem::ManagedAccounts)),
+            "Settings should expose global managed accounts"
+        );
+    }
+
+    #[test]
+    fn settings_managed_accounts_item_opens_page_and_refreshes_when_status_missing() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Settings;
+        app.focus = Focus::Content;
+        app.settings_idx = SettingsItem::ALL
+            .iter()
+            .position(|item| matches!(item, SettingsItem::ManagedAccounts))
+            .expect("ManagedAccounts missing from SettingsItem::ALL");
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+
+        assert!(matches!(app.route, Route::SettingsManagedAccounts));
+        assert!(matches!(
+            action,
+            Action::ManagedAuthRefresh { auth_provider } if auth_provider == "codex_oauth"
+        ));
+    }
+
+    #[test]
+    fn settings_managed_accounts_page_uses_single_chatgpt_entry() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::SettingsManagedAccounts;
+        app.focus = Focus::Content;
+
+        app.settings_managed_accounts_idx = 0;
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(
+            action,
+            Action::ManagedAuthRefresh { auth_provider } if auth_provider == "codex_oauth"
+        ));
+
+        app.managed_auth_status = Some(crate::services::ManagedAuthStatus {
+            accounts: vec![],
+            ..managed_auth_status()
+        });
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(
+            action,
+            Action::ManagedAuthStartLogin { auth_provider } if auth_provider == "codex_oauth"
+        ));
+
+        app.managed_auth_status = Some(managed_auth_status());
+        app.settings_managed_accounts_idx = 0;
+        let action = app.on_key(key(KeyCode::Down), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.settings_managed_accounts_idx, 0);
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            &app.overlay,
+            Overlay::ManagedAccountActionPicker {
+                auth_provider,
+                account_id,
+                selected: 0,
+            } if auth_provider == "codex_oauth" && account_id == "acc-default"
+        ));
+    }
+
+    #[test]
     #[serial(home_settings)]
     fn settings_openclaw_config_dir_item_opens_text_input() {
         let temp_home = TempDir::new().expect("create temp home");
@@ -11747,6 +11865,102 @@ mod tests {
                 selected: 0,
                 editing: true
             }
+        ));
+    }
+
+    #[test]
+    fn provider_codex_oauth_model_fetch_uses_managed_auth_even_for_default_account() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.form = Some(FormState::ProviderAdd(claude_codex_oauth_form()));
+        app.overlay = Overlay::ClaudeModelPicker {
+            selected: 0,
+            editing: false,
+        };
+
+        let action = app.on_key(key(KeyCode::Enter), &data());
+
+        assert!(matches!(
+            action,
+            Action::ProviderModelFetch {
+                codex_oauth: true,
+                codex_oauth_account_id: None,
+                field: ProviderAddField::ClaudeModelConfig,
+                claude_idx: Some(0),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn managed_account_binding_picker_sets_and_clears_provider_account() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.managed_auth_status = Some(managed_auth_status());
+        app.form = Some(FormState::ProviderAdd(claude_codex_oauth_form()));
+
+        app.overlay = Overlay::ManagedAccountPicker {
+            auth_provider: "codex_oauth".to_string(),
+            selected: 2,
+            binding: true,
+            selected_account_id: None,
+        };
+        let action = app.on_key(key(KeyCode::Enter), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        let account_id = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => form.codex_oauth_account_id.as_deref(),
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(account_id, Some("acc-alt"));
+
+        app.overlay = Overlay::ManagedAccountPicker {
+            auth_provider: "codex_oauth".to_string(),
+            selected: 0,
+            binding: true,
+            selected_account_id: Some("acc-alt".to_string()),
+        };
+        let action = app.on_key(key(KeyCode::Enter), &data());
+        assert!(matches!(action, Action::None));
+        let account_id = match app.form.as_ref() {
+            Some(FormState::ProviderAdd(form)) => form.codex_oauth_account_id.as_deref(),
+            other => panic!("expected ProviderAdd form, got: {other:?}"),
+        };
+        assert_eq!(account_id, None);
+    }
+
+    #[test]
+    fn managed_account_action_picker_emits_default_and_remove_actions() {
+        let mut app = App::new(Some(AppType::Claude));
+
+        app.overlay = Overlay::ManagedAccountActionPicker {
+            auth_provider: "codex_oauth".to_string(),
+            account_id: "acc-alt".to_string(),
+            selected: 0,
+        };
+        let action = app.on_key(key(KeyCode::Enter), &data());
+        assert!(matches!(
+            action,
+            Action::ManagedAuthSetDefault {
+                auth_provider,
+                account_id,
+            } if auth_provider == "codex_oauth" && account_id == "acc-alt"
+        ));
+
+        app.overlay = Overlay::ManagedAccountActionPicker {
+            auth_provider: "codex_oauth".to_string(),
+            account_id: "acc-alt".to_string(),
+            selected: 1,
+        };
+        let action = app.on_key(key(KeyCode::Enter), &data());
+        assert!(matches!(
+            action,
+            Action::ManagedAuthRemove {
+                auth_provider,
+                account_id,
+            } if auth_provider == "codex_oauth" && account_id == "acc-alt"
         ));
     }
 

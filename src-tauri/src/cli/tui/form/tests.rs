@@ -45,6 +45,7 @@ fn provider_add_form_template_labels_follow_explicit_support_matrix() {
         vec![
             "Custom",
             "Claude Official",
+            "Codex",
             "* PackyCode",
             "* AICodeMirror",
             "* RightCode",
@@ -89,6 +90,100 @@ fn provider_add_form_template_labels_follow_explicit_support_matrix() {
     assert!(
         !openclaw_labels.contains(&"* PackyCode") && !openclaw_labels.contains(&"* RightCode"),
         "OpenClaw should only expose the AICodeMirror sponsor preset"
+    );
+}
+
+#[test]
+fn provider_add_form_codex_oauth_template_matches_upstream_contract() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    let existing_ids = Vec::<String>::new();
+    let idx = template_index_by_label(AppType::Claude, "Codex");
+
+    form.apply_template(idx, &existing_ids);
+
+    assert!(form.is_claude_codex_oauth_provider());
+    assert_eq!(form.name.value, "Codex");
+    assert_eq!(form.website_url.value, "https://openai.com/chatgpt/pricing");
+    assert_eq!(
+        form.claude_base_url.value,
+        "https://chatgpt.com/backend-api/codex"
+    );
+    assert_eq!(
+        form.claude_api_format,
+        crate::cli::tui::form::ClaudeApiFormat::OpenAiResponses
+    );
+    assert_eq!(form.claude_model.value, "gpt-5.4");
+    assert_eq!(form.claude_haiku_model.value, "gpt-5.4-mini");
+    assert!(!form.codex_fast_mode);
+    assert!(form.claude_hide_attribution);
+
+    let fields = form.fields();
+    assert!(fields.contains(&ProviderAddField::CodexOAuthAccount));
+    assert!(fields.contains(&ProviderAddField::CodexFastMode));
+    assert!(fields.contains(&ProviderAddField::ClaudeModelConfig));
+    assert!(fields.contains(&ProviderAddField::ClaudeHideAttribution));
+    assert!(!fields.contains(&ProviderAddField::ClaudeBaseUrl));
+    assert!(!fields.contains(&ProviderAddField::ClaudeApiFormat));
+    assert!(!fields.contains(&ProviderAddField::ClaudeApiKey));
+
+    let provider = form.to_provider_json_value();
+    assert_eq!(provider["meta"]["providerType"], "codex_oauth");
+    assert_eq!(provider["meta"]["apiFormat"], "openai_responses");
+    assert_eq!(provider["meta"]["codexFastMode"], false);
+    assert_eq!(provider["meta"]["authBinding"]["source"], "managed_account");
+    assert_eq!(
+        provider["meta"]["authBinding"]["authProvider"],
+        "codex_oauth"
+    );
+    assert!(
+        provider["meta"]["authBinding"].get("accountId").is_none(),
+        "default-account binding should omit accountId"
+    );
+    assert_eq!(
+        provider["settingsConfig"]["env"]["ANTHROPIC_BASE_URL"],
+        "https://chatgpt.com/backend-api/codex"
+    );
+    assert!(
+        provider["settingsConfig"]["env"]
+            .get("ANTHROPIC_AUTH_TOKEN")
+            .is_none(),
+        "Codex OAuth providers must not persist provider API keys"
+    );
+}
+
+#[test]
+fn provider_edit_form_codex_oauth_loads_account_and_fast_mode() {
+    let provider_value = json!({
+        "id": "codex-oauth",
+        "name": "Codex",
+        "settingsConfig": {
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://chatgpt.com/backend-api/codex",
+                "ANTHROPIC_MODEL": "gpt-5.4",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": "gpt-5.4-mini"
+            }
+        },
+        "meta": {
+            "providerType": "codex_oauth",
+            "apiFormat": "openai_responses",
+            "codexFastMode": true,
+            "authBinding": {
+                "source": "managed_account",
+                "authProvider": "codex_oauth",
+                "accountId": "acc-123"
+            }
+        }
+    });
+    let provider: Provider = serde_json::from_value(provider_value).expect("provider json valid");
+
+    let form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+
+    assert!(form.is_claude_codex_oauth_provider());
+    assert_eq!(form.codex_oauth_account_id.as_deref(), Some("acc-123"));
+    assert!(form.codex_fast_mode);
+    assert_eq!(
+        form.claude_api_format,
+        crate::cli::tui::form::ClaudeApiFormat::OpenAiResponses
     );
 }
 

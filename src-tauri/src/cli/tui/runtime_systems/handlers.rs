@@ -10,9 +10,9 @@ use super::super::app::{App, ConfirmAction, ConfirmOverlay, LoadingKind, Overlay
 use super::super::data::{load_state, UiData};
 use super::super::runtime_actions::app_display_name;
 use super::types::{
-    build_stream_check_result_lines, LocalEnvMsg, ModelFetchMsg, ProxyMsg, QuotaMsg,
-    RequestTracker, SessionMsg, SkillsMsg, SpeedtestMsg, StreamCheckMsg, UpdateMsg, WebDavDone,
-    WebDavErr, WebDavMsg, WebDavReqKind,
+    build_stream_check_result_lines, LocalEnvMsg, ManagedAuthMsg, ModelFetchMsg, ProxyMsg,
+    QuotaMsg, RequestTracker, SessionMsg, SkillsMsg, SpeedtestMsg, StreamCheckMsg, UpdateMsg,
+    WebDavDone, WebDavErr, WebDavMsg, WebDavReqKind,
 };
 
 pub(crate) fn handle_stream_check_msg(app: &mut App, msg: StreamCheckMsg) {
@@ -254,6 +254,171 @@ pub(crate) fn handle_model_fetch_msg(app: &mut App, msg: ModelFetchMsg) {
             }
         }
     }
+}
+
+pub(crate) fn handle_managed_auth_msg(app: &mut App, msg: ManagedAuthMsg) {
+    match msg {
+        ManagedAuthMsg::Status {
+            auth_provider,
+            result,
+        } => {
+            app.managed_auth_loading = false;
+            match result {
+                Ok(status) => {
+                    app.managed_auth_status = Some(status);
+                }
+                Err(err) => {
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_refresh_failed(&err),
+                        ToastKind::Warning,
+                    );
+                    if app
+                        .managed_auth_status
+                        .as_ref()
+                        .is_none_or(|status| status.provider != auth_provider)
+                    {
+                        app.managed_auth_status = None;
+                    }
+                }
+            }
+        }
+        ManagedAuthMsg::LoginStarted {
+            auth_provider,
+            result,
+        } => {
+            app.managed_auth_loading = false;
+            match result {
+                Ok(device) => {
+                    let now = app.tick;
+                    let expires_ticks = seconds_to_tui_ticks(device.expires_in).max(1);
+                    let interval_ticks = seconds_to_tui_ticks(device.interval).max(1);
+                    app.managed_auth_login = Some(crate::cli::tui::app::ManagedAuthLoginState {
+                        auth_provider,
+                        device_code: device.device_code,
+                        user_code: device.user_code,
+                        verification_uri: device.verification_uri,
+                        expires_at_tick: now.saturating_add(expires_ticks),
+                        poll_interval_ticks: interval_ticks,
+                        next_poll_tick: now,
+                    });
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_login_started(),
+                        ToastKind::Info,
+                    );
+                }
+                Err(err) => {
+                    app.managed_auth_login = None;
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_login_failed(&err),
+                        ToastKind::Error,
+                    );
+                }
+            }
+        }
+        ManagedAuthMsg::LoginPolled {
+            auth_provider,
+            device_code,
+            result,
+        } => match result {
+            Ok(Some(account)) => {
+                if app
+                    .managed_auth_login
+                    .as_ref()
+                    .is_some_and(|login| login.device_code == device_code)
+                {
+                    app.managed_auth_login = None;
+                }
+                app.managed_auth_loading = false;
+                if let Some(status) = app.managed_auth_status.as_mut() {
+                    if status.provider == auth_provider {
+                        status.authenticated = true;
+                        if status.default_account_id.is_none() {
+                            status.default_account_id = Some(account.id.clone());
+                        }
+                        status.accounts.retain(|row| row.id != account.id);
+                        status.accounts.insert(0, account.clone());
+                    }
+                } else {
+                    app.managed_auth_status = Some(crate::services::ManagedAuthStatus {
+                        provider: auth_provider,
+                        authenticated: true,
+                        default_account_id: Some(account.id.clone()),
+                        migration_error: None,
+                        accounts: vec![account.clone()],
+                    });
+                }
+                app.push_toast(
+                    texts::tui_toast_managed_auth_login_finished(&account.login),
+                    ToastKind::Success,
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                if app
+                    .managed_auth_login
+                    .as_ref()
+                    .is_some_and(|login| login.device_code == device_code)
+                {
+                    app.managed_auth_login = None;
+                }
+                app.managed_auth_loading = false;
+                app.push_toast(
+                    texts::tui_toast_managed_auth_login_failed(&err),
+                    ToastKind::Error,
+                );
+            }
+        },
+        ManagedAuthMsg::DefaultSet {
+            auth_provider: _,
+            account_id: _,
+            result,
+        } => {
+            app.managed_auth_loading = false;
+            match result {
+                Ok(status) => {
+                    app.managed_auth_status = Some(status);
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_default_updated(),
+                        ToastKind::Success,
+                    );
+                }
+                Err(err) => {
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_default_failed(&err),
+                        ToastKind::Error,
+                    );
+                }
+            }
+        }
+        ManagedAuthMsg::Removed {
+            auth_provider: _,
+            account_id,
+            result,
+        } => {
+            app.managed_auth_loading = false;
+            match result {
+                Ok(status) => {
+                    app.clear_codex_oauth_binding_if_removed(&account_id);
+                    app.managed_auth_status = Some(status);
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_account_removed(),
+                        ToastKind::Success,
+                    );
+                }
+                Err(err) => {
+                    app.push_toast(
+                        texts::tui_toast_managed_auth_remove_failed(&err),
+                        ToastKind::Error,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn seconds_to_tui_ticks(seconds: u64) -> u64 {
+    let millis = seconds.saturating_mul(1000);
+    millis.div_ceil(crate::cli::tui::TUI_TICK_RATE.as_millis() as u64)
 }
 
 pub(crate) fn handle_skills_msg(

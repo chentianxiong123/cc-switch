@@ -400,6 +400,17 @@ pub enum CommonSnippetViewSource {
     ProviderForm,
 }
 
+#[derive(Debug, Clone)]
+pub struct ManagedAuthLoginState {
+    pub auth_provider: String,
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_at_tick: u64,
+    pub poll_interval_ticks: u64,
+    pub next_poll_tick: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadingKind {
     Generic,
@@ -465,6 +476,17 @@ pub enum Overlay {
         selected: usize,
     },
     UsageQueryTemplatePicker {
+        selected: usize,
+    },
+    ManagedAccountPicker {
+        auth_provider: String,
+        selected: usize,
+        binding: bool,
+        selected_account_id: Option<String>,
+    },
+    ManagedAccountActionPicker {
+        auth_provider: String,
+        account_id: String,
         selected: usize,
     },
     HermesModelsPicker {
@@ -581,6 +603,8 @@ impl Overlay {
             | Overlay::FailoverQueueManager { .. }
             | Overlay::ClaudeApiFormatPicker { .. }
             | Overlay::UsageQueryTemplatePicker { .. }
+            | Overlay::ManagedAccountPicker { .. }
+            | Overlay::ManagedAccountActionPicker { .. }
             | Overlay::OpenClawToolsProfilePicker { .. }
             | Overlay::OpenClawAgentsFallbackPicker { .. }
             | Overlay::McpAppsPicker { .. }

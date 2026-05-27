@@ -7,8 +7,8 @@ use crate::error::AppError;
 use super::app::{Action, App, Focus, Overlay, TextViewState, ToastKind};
 use super::data::UiData;
 use super::runtime_systems::{
-    LocalEnvReq, ModelFetchReq, ProxyReq, RequestTracker, SessionReq, SkillsReq, StreamCheckReq,
-    UpdateReq, WebDavReq,
+    LocalEnvReq, ManagedAuthReq, ModelFetchReq, ProxyReq, RequestTracker, SessionReq, SkillsReq,
+    StreamCheckReq, UpdateReq, WebDavReq,
 };
 use super::terminal::TuiTerminal;
 
@@ -44,7 +44,8 @@ fn normalize_route_for_app(app_type: &AppType, route: &super::route::Route) -> s
             | super::route::Route::ConfigOpenClawTools
             | super::route::Route::ConfigOpenClawAgents
             | super::route::Route::Settings
-            | super::route::Route::SettingsProxy => route.clone(),
+            | super::route::Route::SettingsProxy
+            | super::route::Route::SettingsManagedAccounts => route.clone(),
             _ => super::route::Route::Main,
         },
         AppType::Hermes => match route {
@@ -59,7 +60,8 @@ fn normalize_route_for_app(app_type: &AppType, route: &super::route::Route) -> s
             | super::route::Route::SkillsRepos
             | super::route::Route::SkillDetail { .. }
             | super::route::Route::Settings
-            | super::route::Route::SettingsProxy => route.clone(),
+            | super::route::Route::SettingsProxy
+            | super::route::Route::SettingsManagedAccounts => route.clone(),
             _ => super::route::Route::Main,
         },
         _ => match route {
@@ -122,6 +124,7 @@ pub(super) struct RuntimeActionContext<'a> {
     update_req_tx: Option<&'a mpsc::Sender<UpdateReq>>,
     update_check: &'a mut RequestTracker,
     model_fetch_req_tx: Option<&'a mpsc::Sender<ModelFetchReq>>,
+    managed_auth_req_tx: Option<&'a mpsc::Sender<ManagedAuthReq>>,
 }
 
 pub(crate) fn handle_action(
@@ -140,6 +143,7 @@ pub(crate) fn handle_action(
     update_req_tx: Option<&mpsc::Sender<UpdateReq>>,
     update_check: &mut RequestTracker,
     model_fetch_req_tx: Option<&mpsc::Sender<ModelFetchReq>>,
+    managed_auth_req_tx: Option<&mpsc::Sender<ManagedAuthReq>>,
     action: Action,
 ) -> Result<(), AppError> {
     let mut ctx = RuntimeActionContext {
@@ -158,6 +162,7 @@ pub(crate) fn handle_action(
         update_req_tx,
         update_check,
         model_fetch_req_tx,
+        managed_auth_req_tx,
     };
 
     match action {
@@ -373,9 +378,19 @@ pub(crate) fn handle_action(
         Action::ProviderModelFetch {
             base_url,
             api_key,
+            codex_oauth,
+            codex_oauth_account_id,
             field,
             claude_idx,
-        } => providers::model_fetch(&mut ctx, base_url, api_key, field, claude_idx),
+        } => providers::model_fetch(
+            &mut ctx,
+            base_url,
+            api_key,
+            codex_oauth,
+            codex_oauth_account_id,
+            field,
+            claude_idx,
+        ),
         Action::McpToggle { id, enabled } => mcp::toggle(&mut ctx, id, enabled),
         Action::McpSetApps { id, apps } => mcp::set_apps(&mut ctx, id, apps),
         Action::McpDelete { id } => mcp::delete(&mut ctx, id),
@@ -501,6 +516,20 @@ pub(crate) fn handle_action(
         Action::SwitchVisibleAppsToManual { apps, selected } => {
             settings::switch_visible_apps_to_manual(&mut ctx, apps, selected)
         }
+        Action::ManagedAuthRefresh { auth_provider } => {
+            settings::managed_auth_refresh(&mut ctx, auth_provider)
+        }
+        Action::ManagedAuthStartLogin { auth_provider } => {
+            settings::managed_auth_start_login(&mut ctx, auth_provider)
+        }
+        Action::ManagedAuthSetDefault {
+            auth_provider,
+            account_id,
+        } => settings::managed_auth_set_default(&mut ctx, auth_provider, account_id),
+        Action::ManagedAuthRemove {
+            auth_provider,
+            account_id,
+        } => settings::managed_auth_remove(&mut ctx, auth_provider, account_id),
         Action::CheckUpdate => updates::check(&mut ctx),
         Action::ConfirmUpdate => updates::confirm(&mut ctx),
         Action::CancelUpdate => {
@@ -608,6 +637,7 @@ mod tests {
             None,
             &mut update_check,
             None,
+            None,
             action,
         )
     }
@@ -710,6 +740,7 @@ mod tests {
             &mut webdav_loading,
             None,
             &mut update_check,
+            None,
             None,
             Action::SetAppType(AppType::Claude),
         )

@@ -8,11 +8,12 @@ use crate::settings::{set_webdav_sync_settings, webdav_jianguoyun_preset};
 use super::super::data::load_state;
 use super::types::{
     fetch_provider_models_for_tui, model_fetch_strategy_for_field, LocalEnvMsg, LocalEnvReq,
-    LocalEnvSystem, ModelFetchMsg, ModelFetchReq, ModelFetchSystem, ProxyMsg, ProxyReq,
-    ProxySystem, QuotaMsg, QuotaReq, QuotaSystem, SessionMsg, SessionReq, SessionSystem, SkillsMsg,
-    SkillsReq, SkillsSystem, SpeedtestMsg, SpeedtestSystem, StreamCheckMsg, StreamCheckReq,
-    StreamCheckSystem, UpdateMsg, UpdateReq, UpdateSystem, WebDavDone, WebDavErr, WebDavMsg,
-    WebDavReq, WebDavReqKind, WebDavSystem,
+    LocalEnvSystem, ManagedAuthMsg, ManagedAuthReq, ManagedAuthSystem, ModelFetchMsg,
+    ModelFetchReq, ModelFetchSystem, ProxyMsg, ProxyReq, ProxySystem, QuotaMsg, QuotaReq,
+    QuotaSystem, SessionMsg, SessionReq, SessionSystem, SkillsMsg, SkillsReq, SkillsSystem,
+    SpeedtestMsg, SpeedtestSystem, StreamCheckMsg, StreamCheckReq, StreamCheckSystem, UpdateMsg,
+    UpdateReq, UpdateSystem, WebDavDone, WebDavErr, WebDavMsg, WebDavReq, WebDavReqKind,
+    WebDavSystem,
 };
 
 pub(crate) fn start_proxy_system() -> Result<ProxySystem, AppError> {
@@ -428,15 +429,24 @@ fn model_fetch_worker_loop(rx: mpsc::Receiver<ModelFetchReq>, tx: mpsc::Sender<M
             request_id,
             base_url,
             api_key,
+            codex_oauth,
+            codex_oauth_account_id,
             field,
             claude_idx,
         } = req;
-        let strategy = model_fetch_strategy_for_field(field);
-        let result = rt
-            .block_on(async {
+        let result = if codex_oauth {
+            rt.block_on(async {
+                crate::services::CodexOAuthService::get_models(codex_oauth_account_id.as_deref())
+                    .await
+                    .map(|models| models.into_iter().map(|model| model.id).collect())
+            })
+        } else {
+            let strategy = model_fetch_strategy_for_field(field);
+            rt.block_on(async {
                 fetch_provider_models_for_tui(&base_url, api_key.as_deref(), strategy).await
             })
-            .map_err(|e| e.to_string());
+            .map_err(|e| e.to_string())
+        };
 
         let _ = tx.send(ModelFetchMsg::Finished {
             request_id,
@@ -444,6 +454,138 @@ fn model_fetch_worker_loop(rx: mpsc::Receiver<ModelFetchReq>, tx: mpsc::Sender<M
             claude_idx,
             result,
         });
+    }
+}
+
+pub(crate) fn start_managed_auth_system() -> Result<ManagedAuthSystem, AppError> {
+    let (result_tx, result_rx) = mpsc::channel::<ManagedAuthMsg>();
+    let (req_tx, req_rx) = mpsc::channel::<ManagedAuthReq>();
+
+    let handle = std::thread::Builder::new()
+        .name("cc-switch-managed-auth".to_string())
+        .spawn(move || managed_auth_worker_loop(req_rx, result_tx))
+        .map_err(|e| AppError::IoContext {
+            context: "failed to spawn managed auth worker thread".to_string(),
+            source: e,
+        })?;
+
+    Ok(ManagedAuthSystem {
+        req_tx,
+        result_rx,
+        _handle: handle,
+    })
+}
+
+fn managed_auth_worker_loop(rx: mpsc::Receiver<ManagedAuthReq>, tx: mpsc::Sender<ManagedAuthMsg>) {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let err = e.to_string();
+            while let Ok(req) = rx.recv() {
+                let msg = match req {
+                    ManagedAuthReq::Refresh { auth_provider } => ManagedAuthMsg::Status {
+                        auth_provider,
+                        result: Err(err.clone()),
+                    },
+                    ManagedAuthReq::StartLogin { auth_provider } => ManagedAuthMsg::LoginStarted {
+                        auth_provider,
+                        result: Err(err.clone()),
+                    },
+                    ManagedAuthReq::PollLogin {
+                        auth_provider,
+                        device_code,
+                    } => ManagedAuthMsg::LoginPolled {
+                        auth_provider,
+                        device_code,
+                        result: Err(err.clone()),
+                    },
+                    ManagedAuthReq::SetDefault {
+                        auth_provider,
+                        account_id,
+                    } => ManagedAuthMsg::DefaultSet {
+                        auth_provider,
+                        account_id,
+                        result: Err(err.clone()),
+                    },
+                    ManagedAuthReq::Remove {
+                        auth_provider,
+                        account_id,
+                    } => ManagedAuthMsg::Removed {
+                        auth_provider,
+                        account_id,
+                        result: Err(err.clone()),
+                    },
+                };
+                let _ = tx.send(msg);
+            }
+            return;
+        }
+    };
+
+    while let Ok(req) = rx.recv() {
+        match req {
+            ManagedAuthReq::Refresh { auth_provider } => {
+                let result = rt.block_on(crate::services::AuthService::get_status(&auth_provider));
+                let _ = tx.send(ManagedAuthMsg::Status {
+                    auth_provider,
+                    result,
+                });
+            }
+            ManagedAuthReq::StartLogin { auth_provider } => {
+                let result = rt.block_on(crate::services::AuthService::start_login(&auth_provider));
+                let _ = tx.send(ManagedAuthMsg::LoginStarted {
+                    auth_provider,
+                    result,
+                });
+            }
+            ManagedAuthReq::PollLogin {
+                auth_provider,
+                device_code,
+            } => {
+                let result = rt.block_on(crate::services::AuthService::poll_for_account(
+                    &auth_provider,
+                    &device_code,
+                ));
+                let _ = tx.send(ManagedAuthMsg::LoginPolled {
+                    auth_provider,
+                    device_code,
+                    result,
+                });
+            }
+            ManagedAuthReq::SetDefault {
+                auth_provider,
+                account_id,
+            } => {
+                let result = rt.block_on(async {
+                    crate::services::AuthService::set_default_account(&auth_provider, &account_id)
+                        .await?;
+                    crate::services::AuthService::get_status(&auth_provider).await
+                });
+                let _ = tx.send(ManagedAuthMsg::DefaultSet {
+                    auth_provider,
+                    account_id,
+                    result,
+                });
+            }
+            ManagedAuthReq::Remove {
+                auth_provider,
+                account_id,
+            } => {
+                let result = rt.block_on(async {
+                    crate::services::AuthService::remove_account(&auth_provider, &account_id)
+                        .await?;
+                    crate::services::AuthService::get_status(&auth_provider).await
+                });
+                let _ = tx.send(ManagedAuthMsg::Removed {
+                    auth_provider,
+                    account_id,
+                    result,
+                });
+            }
+        }
     }
 }
 

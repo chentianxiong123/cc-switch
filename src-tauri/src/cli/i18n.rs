@@ -1618,6 +1618,22 @@ pub mod texts {
         }
     }
 
+    pub fn tui_label_chatgpt_account() -> &'static str {
+        if is_chinese() {
+            "ChatGPT 账号"
+        } else {
+            "ChatGPT Account"
+        }
+    }
+
+    pub fn tui_label_codex_fast_mode() -> &'static str {
+        if is_chinese() {
+            "FAST 模式"
+        } else {
+            "FAST mode"
+        }
+    }
+
     pub fn tui_label_provider_package() -> &'static str {
         if is_chinese() {
             "Provider / npm 包"
@@ -3246,6 +3262,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_key_login() -> &'static str {
+        if is_chinese() {
+            "登录"
+        } else {
+            "login"
+        }
+    }
+
     pub fn tui_key_open_directory() -> &'static str {
         if is_chinese() {
             "打开目录"
@@ -3605,6 +3629,168 @@ pub mod texts {
             "设置"
         } else {
             "Settings"
+        }
+    }
+
+    pub fn tui_settings_managed_accounts_title() -> &'static str {
+        if is_chinese() {
+            "托管账号"
+        } else {
+            "Managed Accounts"
+        }
+    }
+
+    pub fn tui_managed_accounts_follow_default() -> &'static str {
+        if is_chinese() {
+            "跟随默认账号"
+        } else {
+            "Follow default"
+        }
+    }
+
+    pub fn tui_managed_accounts_not_loaded() -> &'static str {
+        if is_chinese() {
+            "未加载"
+        } else {
+            "Not loaded"
+        }
+    }
+
+    pub fn tui_managed_accounts_not_authenticated() -> &'static str {
+        if is_chinese() {
+            "未认证"
+        } else {
+            "Not authenticated"
+        }
+    }
+
+    pub fn tui_managed_accounts_count(count: usize) -> String {
+        if is_chinese() {
+            format!("{count} 个账号")
+        } else if count == 1 {
+            "1 account".to_string()
+        } else {
+            format!("{count} accounts")
+        }
+    }
+
+    pub fn tui_managed_accounts_chatgpt_provider() -> &'static str {
+        if is_chinese() {
+            "ChatGPT"
+        } else {
+            "ChatGPT"
+        }
+    }
+
+    pub fn tui_managed_accounts_provider_column() -> &'static str {
+        if is_chinese() {
+            "服务"
+        } else {
+            "Service"
+        }
+    }
+
+    pub fn tui_managed_accounts_details_title() -> &'static str {
+        if is_chinese() {
+            "账号详情"
+        } else {
+            "Account Details"
+        }
+    }
+
+    pub fn tui_managed_accounts_account_label() -> &'static str {
+        if is_chinese() {
+            "账号"
+        } else {
+            "Account"
+        }
+    }
+
+    pub fn tui_managed_accounts_account_id_label() -> &'static str {
+        if is_chinese() {
+            "账号 ID"
+        } else {
+            "Account ID"
+        }
+    }
+
+    pub fn tui_managed_accounts_auth_status_label() -> &'static str {
+        if is_chinese() {
+            "状态"
+        } else {
+            "Status"
+        }
+    }
+
+    pub fn tui_managed_accounts_authenticated() -> &'static str {
+        if is_chinese() {
+            "已认证"
+        } else {
+            "Authenticated"
+        }
+    }
+
+    pub fn tui_managed_accounts_default() -> &'static str {
+        if is_chinese() {
+            "默认"
+        } else {
+            "default"
+        }
+    }
+
+    pub fn tui_managed_accounts_default_account_label() -> &'static str {
+        if is_chinese() {
+            "默认账号"
+        } else {
+            "Default Account"
+        }
+    }
+
+    pub fn tui_managed_accounts_login_with_chatgpt() -> &'static str {
+        if is_chinese() {
+            "登录 ChatGPT"
+        } else {
+            "Log in with ChatGPT"
+        }
+    }
+
+    pub fn tui_managed_accounts_login_status() -> &'static str {
+        if is_chinese() {
+            "登录状态"
+        } else {
+            "Login Status"
+        }
+    }
+
+    pub fn tui_managed_accounts_login_waiting() -> &'static str {
+        if is_chinese() {
+            "等待浏览器确认..."
+        } else {
+            "Waiting for browser confirmation..."
+        }
+    }
+
+    pub fn tui_managed_accounts_user_code(code: &str) -> String {
+        if is_chinese() {
+            format!("用户代码: {code}")
+        } else {
+            format!("User code: {code}")
+        }
+    }
+
+    pub fn tui_managed_accounts_verification_url(url: &str) -> String {
+        if is_chinese() {
+            format!("验证地址: {url}")
+        } else {
+            format!("Verification URL: {url}")
+        }
+    }
+
+    pub fn tui_managed_accounts_login_idle() -> &'static str {
+        if is_chinese() {
+            "未进行登录。"
+        } else {
+            "No login in progress."
         }
     }
 
@@ -6096,6 +6282,102 @@ pub mod texts {
             "本次会话模型获取后台任务不可用。"
         } else {
             "Model fetch worker is disabled for this session."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_worker_unavailable(err: &str) -> String {
+        if is_chinese() {
+            format!("托管账号后台任务不可用: {err}")
+        } else {
+            format!("Managed accounts worker unavailable: {err}")
+        }
+    }
+
+    pub fn tui_error_managed_auth_worker_unavailable() -> &'static str {
+        if is_chinese() {
+            "托管账号后台任务不可用。"
+        } else {
+            "Managed accounts worker unavailable."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_request_failed(err: &str) -> String {
+        if is_chinese() {
+            format!("托管账号请求发送失败: {err}")
+        } else {
+            format!("Managed accounts request failed: {err}")
+        }
+    }
+
+    pub fn tui_toast_managed_auth_login_expired() -> &'static str {
+        if is_chinese() {
+            "登录已过期。"
+        } else {
+            "Login expired."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_refresh_failed(err: &str) -> String {
+        if is_chinese() {
+            format!("刷新托管账号失败: {err}")
+        } else {
+            format!("Failed to refresh managed accounts: {err}")
+        }
+    }
+
+    pub fn tui_toast_managed_auth_login_started() -> &'static str {
+        if is_chinese() {
+            "ChatGPT 登录已开始。"
+        } else {
+            "ChatGPT login started."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_login_failed(err: &str) -> String {
+        if is_chinese() {
+            format!("ChatGPT 登录失败: {err}")
+        } else {
+            format!("ChatGPT login failed: {err}")
+        }
+    }
+
+    pub fn tui_toast_managed_auth_login_finished(login: &str) -> String {
+        if is_chinese() {
+            format!("ChatGPT 登录完成: {login}")
+        } else {
+            format!("ChatGPT login finished: {login}")
+        }
+    }
+
+    pub fn tui_toast_managed_auth_default_updated() -> &'static str {
+        if is_chinese() {
+            "默认账号已更新。"
+        } else {
+            "Default account updated."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_default_failed(err: &str) -> String {
+        if is_chinese() {
+            format!("设置默认账号失败: {err}")
+        } else {
+            format!("Failed to set default account: {err}")
+        }
+    }
+
+    pub fn tui_toast_managed_auth_account_removed() -> &'static str {
+        if is_chinese() {
+            "账号已移除。"
+        } else {
+            "Account removed."
+        }
+    }
+
+    pub fn tui_toast_managed_auth_remove_failed(err: &str) -> String {
+        if is_chinese() {
+            format!("移除账号失败: {err}")
+        } else {
+            format!("Failed to remove account: {err}")
         }
     }
 
