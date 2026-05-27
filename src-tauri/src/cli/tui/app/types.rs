@@ -277,6 +277,9 @@ pub enum ConfirmAction {
     ProviderDelete {
         id: String,
     },
+    ProviderCopy {
+        id: String,
+    },
     ProviderRemoveFromConfig {
         id: String,
     },

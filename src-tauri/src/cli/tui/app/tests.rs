@@ -252,6 +252,19 @@ mod tests {
         ));
     }
 
+    fn assert_provider_copy_confirm(app: &App, expected_id: &str, expected_name: &str) {
+        assert!(matches!(
+            &app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                title,
+                message,
+                action: ConfirmAction::ProviderCopy { id },
+            }) if id == expected_id
+                && title == texts::tui_confirm_copy_provider_title()
+                && message == &texts::tui_confirm_copy_provider_message(expected_name, expected_id)
+        ));
+    }
+
     fn open_prompt_fields_form() -> App {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Prompts;
@@ -1963,7 +1976,7 @@ mod tests {
     }
 
     #[test]
-    fn providers_c_key_is_noop() {
+    fn providers_c_key_opens_copy_confirm() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
         app.focus = Focus::Content;
@@ -1973,11 +1986,11 @@ mod tests {
 
         let action = app.on_key(key(KeyCode::Char('c')), &data);
         assert!(matches!(action, Action::None));
-        assert!(matches!(app.overlay, Overlay::None));
+        assert_provider_copy_confirm(&app, "p1", "Provider One");
     }
 
     #[test]
-    fn providers_c_key_is_noop_for_openclaw() {
+    fn providers_c_key_opens_copy_confirm_for_openclaw() {
         let mut app = App::new(Some(AppType::OpenClaw));
         app.route = Route::Providers;
         app.focus = Focus::Content;
@@ -2002,7 +2015,7 @@ mod tests {
 
         let action = app.on_key(key(KeyCode::Char('c')), &data);
         assert!(matches!(action, Action::None));
-        assert!(matches!(app.overlay, Overlay::None));
+        assert_provider_copy_confirm(&app, "p1", "Provider One");
     }
 
     #[test]
@@ -4365,6 +4378,155 @@ mod tests {
         assert!(matches!(action, Action::None));
         assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
         assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_copy_confirm_opens_form_without_notice_after_common_config_confirmed() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        app.on_key(key(KeyCode::Char('c')), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn provider_copy_confirm_save_submits_new_copy_with_collision_free_id() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.common_config_notice_confirmed = true;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+        data.providers
+            .rows
+            .push(claude_provider_row("provider-one-copy"));
+
+        app.on_key(key(KeyCode::Char('c')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(ctrl(KeyCode::Char('s')), &data);
+
+        let Action::EditorSubmit { submit, content } = action else {
+            panic!("saving a copied provider should submit new provider content");
+        };
+        assert!(matches!(submit, EditorSubmit::ProviderAdd));
+
+        let copied: serde_json::Value =
+            serde_json::from_str(&content).expect("copy payload should be valid JSON");
+        assert_eq!(copied["id"], "p1-copy");
+        assert_eq!(copied["name"], "Provider One copy");
+        assert_eq!(
+            copied["settingsConfig"]["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "sk-demo"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn provider_copy_confirm_save_persists_with_source_id_copy_semantics() {
+        let temp_home = TempDir::new().expect("create temp home");
+        let _home = EnvGuard::set_home(temp_home.path());
+
+        let state = crate::cli::tui::data::load_state().expect("load state");
+        {
+            let mut config = state.config.write().expect("lock config");
+            let manager = config
+                .get_manager_mut(&AppType::Claude)
+                .expect("claude manager");
+
+            let mut original = Provider::with_id(
+                "p1".to_string(),
+                "Provider One".to_string(),
+                json!({
+                    "env": {
+                        "ANTHROPIC_BASE_URL": "https://example.com",
+                        "ANTHROPIC_AUTH_TOKEN": "sk-demo"
+                    }
+                }),
+                None,
+            );
+            original.sort_index = Some(4);
+            manager.providers.insert(original.id.clone(), original);
+
+            let mut existing_copy = Provider::with_id(
+                "p1-copy".to_string(),
+                "Existing Copy".to_string(),
+                json!({"env": {"ANTHROPIC_BASE_URL": "https://copy.example"}}),
+                None,
+            );
+            existing_copy.sort_index = Some(5);
+            manager
+                .providers
+                .insert(existing_copy.id.clone(), existing_copy);
+        }
+        state.save().expect("persist providers");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.common_config_notice_confirmed = true;
+        let mut data = UiData::load(&AppType::Claude).expect("load data");
+
+        app.on_key(key(KeyCode::Char('c')), &data);
+        app.on_key(key(KeyCode::Enter), &data);
+        let action = app.on_key(ctrl(KeyCode::Char('s')), &data);
+
+        run_runtime_action(&mut app, &mut data, action).expect("save copied provider");
+
+        let refreshed = UiData::load(&AppType::Claude).expect("reload data");
+        let copied = refreshed
+            .providers
+            .rows
+            .iter()
+            .find(|row| row.id == "p1-copy-2")
+            .expect("copy should use source id copy suffix");
+        assert_eq!(copied.provider.name, "Provider One copy");
+        assert_eq!(copied.provider.sort_index, Some(5));
+        assert!(copied.provider.created_at.is_some());
+        assert_eq!(
+            copied.provider.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"],
+            "sk-demo"
+        );
+
+        let shifted = refreshed
+            .providers
+            .rows
+            .iter()
+            .find(|row| row.id == "p1-copy")
+            .expect("existing copy remains");
+        assert_eq!(shifted.provider.sort_index, Some(6));
+    }
+
+    #[test]
+    fn provider_copy_confirm_preserves_first_common_config_notice() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.common_config_notice_confirmed = false;
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        app.on_key(key(KeyCode::Char('c')), &data);
+        let action = app.on_key(key(KeyCode::Enter), &data);
+
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.form, Some(FormState::ProviderAdd(_))));
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay {
+                action: ConfirmAction::CommonConfigNotice,
+                ..
+            })
+        ));
     }
 
     #[test]
