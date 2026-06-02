@@ -9,7 +9,7 @@ use super::super::{
     error::ProxyError,
     http_client,
     json_canonical::canonicalize_value,
-    model_mapper::apply_model_mapping,
+    model_mapper::{apply_model_mapping, strip_one_m_suffix_for_upstream_from_body},
     providers::{
         apply_codex_chat_upstream_model, claude_api_format_needs_transform, get_adapter,
         normalize_anthropic_tool_thinking_history_for_provider,
@@ -118,6 +118,8 @@ impl RequestForwarder {
                     base_url = dynamic_endpoint;
                 }
             }
+        } else {
+            mapped_body = strip_one_m_suffix_for_upstream_from_body(mapped_body);
         }
 
         let claude_api_format = if is_claude_request {

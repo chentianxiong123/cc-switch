@@ -161,6 +161,44 @@ async fn non_bedrock_claude_prepare_request_skips_optimizer_and_cache_injection(
 }
 
 #[tokio::test]
+async fn non_copilot_claude_prepare_request_strips_one_m_suffix_after_mapping() {
+    let mut provider = claude_provider("p1", "https://example.com", None);
+    provider.settings_config["env"] = json!({
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-pro [1M]"
+    });
+    let (_db, router) = test_router().await;
+    let forwarder = RequestForwarder::new(router).expect("create forwarder");
+
+    let request = forwarder
+        .prepare_request(
+            &AppType::Claude,
+            &provider,
+            "/v1/messages",
+            &json!({
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 32,
+                "messages": [{
+                    "role": "user",
+                    "content": "hello"
+                }]
+            }),
+            &HeaderMap::new(),
+            ForwardOptions {
+                max_retries: 0,
+                request_timeout: Some(Duration::from_secs(2)),
+                bypass_circuit_breaker: true,
+            },
+        )
+        .await
+        .expect("prepare regular Claude request")
+        .build()
+        .expect("build regular Claude request");
+
+    let body = request_body_json(&request);
+    assert_eq!(body["model"], "deepseek-v4-pro");
+}
+
+#[tokio::test]
 async fn deepseek_native_claude_prepare_request_normalizes_tool_thinking_history_before_send() {
     let (base_url, hits, bodies, server) =
         spawn_scripted_upstream(vec![(StatusCode::OK, json!({"ok": true}))]).await;
