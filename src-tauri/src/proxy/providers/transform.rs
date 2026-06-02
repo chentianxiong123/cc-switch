@@ -197,7 +197,7 @@ pub fn anthropic_to_openai_with_reasoning_content(
     }
 
     if let Some(v) = body.get("tool_choice") {
-        result["tool_choice"] = v.clone();
+        result["tool_choice"] = map_tool_choice_to_chat(v);
     }
 
     if let Some(key) = cache_key {
@@ -205,6 +205,33 @@ pub fn anthropic_to_openai_with_reasoning_content(
     }
 
     Ok(result)
+}
+
+/// Translate Anthropic tool_choice into OpenAI Chat Completions format.
+fn map_tool_choice_to_chat(tool_choice: &Value) -> Value {
+    match tool_choice {
+        Value::String(value) => match value.as_str() {
+            "any" => json!("required"),
+            _ => json!(value),
+        },
+        Value::Object(obj) => match obj.get("type").and_then(|value| value.as_str()) {
+            Some("any") => json!("required"),
+            Some("auto") => json!("auto"),
+            Some("none") => json!("none"),
+            Some("tool") => {
+                let name = obj
+                    .get("name")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                json!({
+                    "type": "function",
+                    "function": { "name": name }
+                })
+            }
+            _ => tool_choice.clone(),
+        },
+        _ => tool_choice.clone(),
+    }
 }
 
 fn normalize_openai_system_messages(messages: &mut Vec<Value>) {
@@ -719,6 +746,51 @@ mod tests {
         let result = anthropic_to_openai(input, None).unwrap();
 
         assert_eq!(result["tools"][0]["cache_control"]["type"], "ephemeral");
+    }
+
+    fn run_tool_choice(value: Value) -> Value {
+        let input = json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "tools": [{
+                "name": "search",
+                "description": "Search",
+                "input_schema": {"type": "object", "properties": {}}
+            }],
+            "tool_choice": value
+        });
+
+        anthropic_to_openai(input, None).unwrap()["tool_choice"].clone()
+    }
+
+    #[test]
+    fn tool_choice_string_any_maps_to_required() {
+        assert_eq!(run_tool_choice(json!("any")), json!("required"));
+    }
+
+    #[test]
+    fn tool_choice_string_auto_and_none_pass_through() {
+        assert_eq!(run_tool_choice(json!("auto")), json!("auto"));
+        assert_eq!(run_tool_choice(json!("none")), json!("none"));
+    }
+
+    #[test]
+    fn tool_choice_object_any_maps_to_required() {
+        assert_eq!(run_tool_choice(json!({"type": "any"})), json!("required"));
+    }
+
+    #[test]
+    fn tool_choice_object_auto_and_none_collapse_to_string() {
+        assert_eq!(run_tool_choice(json!({"type": "auto"})), json!("auto"));
+        assert_eq!(run_tool_choice(json!({"type": "none"})), json!("none"));
+    }
+
+    #[test]
+    fn tool_choice_forced_tool_maps_to_nested_function_selector() {
+        assert_eq!(
+            run_tool_choice(json!({"type": "tool", "name": "search"})),
+            json!({"type": "function", "function": {"name": "search"}})
+        );
     }
 
     #[test]
