@@ -36,10 +36,73 @@ from typing import Callable, Iterable
 
 BENCH = "ccswitch-bench"
 SCHEMA_VERSION = 10
+OPERATION_SET_FULL = "full"
+OPERATION_SET_CI_BLOCKING = "ci-blocking"
+CI_CLI_OPERATIONS = {
+    "startup_version",
+    "startup_provider_current",
+    "provider_list",
+    "usage_query_show",
+    "sessions_list_json",
+    "sessions_show_json",
+    "sessions_messages_json",
+    "provider_switch_a_to_b",
+    "provider_duplicate_add",
+    "provider_delete_copy",
+}
+CI_TUI_OPERATIONS = {
+    "startup_interactive",
+    "open_usage",
+    "open_sessions_route",
+    "open_sessions_loaded",
+    "open_providers",
+    "provider_switch_a_to_b",
+}
 
 
 def log(message: str) -> None:
     print(message, flush=True)
+
+
+def operation_enabled(operation_set: str, surface: str, operation: str) -> bool:
+    if operation_set == OPERATION_SET_FULL:
+        return True
+    if operation_set == OPERATION_SET_CI_BLOCKING:
+        if surface == "CLI":
+            return operation in CI_CLI_OPERATIONS
+        if surface == "TUI":
+            return operation in CI_TUI_OPERATIONS
+    return False
+
+
+def display_path(path: Path | None, redact_paths: bool) -> str | None:
+    if path is None:
+        return None
+    if redact_paths:
+        return f"<{path.name}>"
+    return str(path)
+
+
+def redact_text(text: str, replacements: dict[str, str]) -> str:
+    redacted = text
+    for raw, replacement in replacements.items():
+        if raw:
+            redacted = redacted.replace(raw, replacement)
+    return redacted
+
+
+def redact_summaries(summaries: list[dict], replacements: dict[str, str]) -> list[dict]:
+    redacted: list[dict] = []
+    for row in summaries:
+        next_row = dict(row)
+        messages = next_row.get("failure_messages")
+        if isinstance(messages, list):
+            next_row["failure_messages"] = [
+                redact_text(message, replacements) if isinstance(message, str) else message
+                for message in messages
+            ]
+        redacted.append(next_row)
+    return redacted
 
 
 def repo_root() -> Path:
@@ -1323,9 +1386,24 @@ def reset_provider_cli(binary: Path, app: str, provider_id: str) -> None:
         raise RuntimeError(f"failed to reset {app} to {provider_id}: {result.stderr or result.stdout}")
 
 
-def benchmark_cli(metrics: Metrics, binary: Path, paths: Paths, iterations: int, warmup: int, first_sessions: tuple[str, str]) -> None:
+def benchmark_cli(
+    metrics: Metrics,
+    binary: Path,
+    paths: Paths,
+    iterations: int,
+    warmup: int,
+    first_sessions: tuple[str, str],
+    operation_set: str,
+) -> None:
     total = warmup + iterations
-    timed_cli(metrics, binary, "CLI", "global", "startup_version", ["--version"])
+    cli_enabled = lambda operation: operation_enabled(operation_set, "CLI", operation)
+    if cli_enabled("startup_version"):
+        if operation_set == OPERATION_SET_CI_BLOCKING:
+            for idx in range(total):
+                version_metrics = metrics if idx >= warmup else Metrics()
+                timed_cli(version_metrics, binary, "CLI", "global", "startup_version", ["--version"])
+        else:
+            timed_cli(metrics, binary, "CLI", "global", "startup_version", ["--version"])
     for app, session_id in [("claude", first_sessions[0]), ("codex", first_sessions[1])]:
         a = f"{BENCH}-{app}-a"
         b = f"{BENCH}-{app}-b"
@@ -1333,28 +1411,38 @@ def benchmark_cli(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
         for idx in range(total):
             record = idx >= warmup
             prefix_metrics = metrics if record else Metrics()
-            timed_cli(prefix_metrics, binary, "CLI", app, "startup_provider_current", ["--app", app, "provider", "current"])
-            timed_cli(prefix_metrics, binary, "CLI", app, "provider_list", ["--app", app, "provider", "list"])
-            timed_cli(prefix_metrics, binary, "CLI", app, "usage_query_show", ["--app", app, "provider", "usage-query", "show", a, "--json"])
-            timed_cli(prefix_metrics, binary, "CLI", app, "sessions_list_json", ["--app", app, "sessions", "list", "--json"])
-            timed_cli(prefix_metrics, binary, "CLI", app, "sessions_show_json", ["--app", app, "sessions", "show", session_id, "--json"])
-            timed_cli(prefix_metrics, binary, "CLI", app, "sessions_messages_json", ["--app", app, "sessions", "messages", session_id, "--json"])
+            if cli_enabled("startup_provider_current"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "startup_provider_current", ["--app", app, "provider", "current"])
+            if cli_enabled("provider_list"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "provider_list", ["--app", app, "provider", "list"])
+            if cli_enabled("usage_query_show"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "usage_query_show", ["--app", app, "provider", "usage-query", "show", a, "--json"])
+            if cli_enabled("sessions_list_json"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "sessions_list_json", ["--app", app, "sessions", "list", "--json"])
+            if cli_enabled("sessions_show_json"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "sessions_show_json", ["--app", app, "sessions", "show", session_id, "--json"])
+            if cli_enabled("sessions_messages_json"):
+                timed_cli(prefix_metrics, binary, "CLI", app, "sessions_messages_json", ["--app", app, "sessions", "messages", session_id, "--json"])
 
-            reset_provider_cli(binary, app, a)
-            switched = timed_cli(prefix_metrics, binary, "CLI", app, "provider_switch_a_to_b", ["--app", app, "provider", "switch", b])
-            if switched.code != 0:
-                continue
+            if cli_enabled("provider_switch_a_to_b"):
+                reset_provider_cli(binary, app, a)
+                switched = timed_cli(prefix_metrics, binary, "CLI", app, "provider_switch_a_to_b", ["--app", app, "provider", "switch", b])
+                if switched.code != 0:
+                    reset_provider_cli(binary, app, a)
+                    continue
 
-            copy_id = f"{a}-copy"
-            remove_provider_prefix_direct(paths, app, copy_id)
-            add = timed_cli(prefix_metrics, binary, "CLI", app, "provider_duplicate_add", ["--app", app, "provider", "duplicate", a])
-            if add.code == 0:
-                delete = run_pty_command([str(binary), "--app", app, "provider", "delete", copy_id], send=b"y\n", timeout=30)
-                if record:
-                    if delete.code == 0:
-                        metrics.add("CLI", app, "provider_delete_copy", delete.ms)
-                    else:
-                        metrics.fail("CLI", app, "provider_delete_copy", delete.stdout or f"exit {delete.code}")
+            if cli_enabled("provider_duplicate_add") or cli_enabled("provider_delete_copy"):
+                copy_id = f"{a}-copy"
+                remove_provider_prefix_direct(paths, app, copy_id)
+                add_metrics = prefix_metrics if cli_enabled("provider_duplicate_add") else Metrics()
+                add = timed_cli(add_metrics, binary, "CLI", app, "provider_duplicate_add", ["--app", app, "provider", "duplicate", a])
+                if add.code == 0 and cli_enabled("provider_delete_copy"):
+                    delete = run_pty_command([str(binary), "--app", app, "provider", "delete", copy_id], send=b"y\n", timeout=30)
+                    if record:
+                        if delete.code == 0:
+                            metrics.add("CLI", app, "provider_delete_copy", delete.ms)
+                        else:
+                            metrics.fail("CLI", app, "provider_delete_copy", delete.stdout or f"exit {delete.code}")
             reset_provider_cli(binary, app, a)
 
 
@@ -1474,9 +1562,10 @@ def tui_sessions_route_marker(screen: str, app: str) -> bool:
     )
 
 
-def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int, warmup: int) -> None:
+def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int, warmup: int, operation_set: str) -> None:
     total = warmup + iterations
     nav = {"providers": 1, "sessions": 4, "usage": 6}
+    tui_enabled = lambda operation: operation_enabled(operation_set, "TUI", operation)
 
     def start_session(app: str, timeout: float = 12.0) -> tuple[TuiSession, float]:
         start = time.perf_counter()
@@ -1524,52 +1613,56 @@ def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
                 continue
 
             session: TuiSession | None = None
-            try:
-                session, startup_ms = start_session(app)
-                if record:
-                    metrics.add("TUI", app, "startup_interactive", startup_ms)
-            except Exception as exc:
-                if record:
-                    metrics.fail("TUI", app, "startup_interactive", str(exc))
-            finally:
-                if session is not None:
-                    session.close()
+            if tui_enabled("startup_interactive"):
+                try:
+                    session, startup_ms = start_session(app)
+                    if record:
+                        metrics.add("TUI", app, "startup_interactive", startup_ms)
+                except Exception as exc:
+                    if record:
+                        metrics.fail("TUI", app, "startup_interactive", str(exc))
+                finally:
+                    if session is not None:
+                        session.close()
 
-            run_tui_op(
-                app,
-                "open_usage",
-                record,
-                lambda session: tui_goto(
-                    session,
-                    0,
-                    nav["usage"],
-                    lambda s: "Usage Statistics" in s or "使用统计" in s or "Usage Trend" in s or "使用趋势" in s,
-                )[1],
-            )
+            if tui_enabled("open_usage"):
+                run_tui_op(
+                    app,
+                    "open_usage",
+                    record,
+                    lambda session: tui_goto(
+                        session,
+                        0,
+                        nav["usage"],
+                        lambda s: "Usage Statistics" in s or "使用统计" in s or "Usage Trend" in s or "使用趋势" in s,
+                    )[1],
+                )
 
-            run_tui_op(
-                app,
-                "open_sessions_route",
-                record,
-                lambda session: tui_goto(
-                    session,
-                    0,
-                    nav["sessions"],
-                    lambda s: tui_sessions_route_marker(s, app),
-                )[1],
-            )
+            if tui_enabled("open_sessions_route"):
+                run_tui_op(
+                    app,
+                    "open_sessions_route",
+                    record,
+                    lambda session: tui_goto(
+                        session,
+                        0,
+                        nav["sessions"],
+                        lambda s: tui_sessions_route_marker(s, app),
+                    )[1],
+                )
 
-            run_tui_op(
-                app,
-                "open_sessions_loaded",
-                record,
-                lambda session: tui_goto(
-                    session,
-                    0,
-                    nav["sessions"],
-                    lambda s: tui_sessions_loaded_marker(s, app),
-                )[1],
-            )
+            if tui_enabled("open_sessions_loaded"):
+                run_tui_op(
+                    app,
+                    "open_sessions_loaded",
+                    record,
+                    lambda session: tui_goto(
+                        session,
+                        0,
+                        nav["sessions"],
+                        lambda s: tui_sessions_loaded_marker(s, app),
+                    )[1],
+                )
 
             def detail_body(session: TuiSession) -> float:
                 tui_goto(session, 0, nav["sessions"], lambda s: tui_sessions_loaded_marker(s, app))
@@ -1591,7 +1684,8 @@ def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
                 )
                 return (time.perf_counter() - start_detail) * 1000
 
-            run_tui_op(app, "open_session_detail", record, detail_body)
+            if tui_enabled("open_session_detail"):
+                run_tui_op(app, "open_session_detail", record, detail_body)
 
             def providers_body(session: TuiSession) -> float:
                 return tui_goto(
@@ -1601,7 +1695,8 @@ def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
                     tui_providers_marker,
                 )[1]
 
-            run_tui_op(app, "open_providers", record, providers_body)
+            if tui_enabled("open_providers"):
+                run_tui_op(app, "open_providers", record, providers_body)
 
             def switch_body(session: TuiSession) -> float:
                 tui_goto(
@@ -1617,8 +1712,9 @@ def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
                 wait_until_tui(session, lambda: effective_current_provider(paths, app) == b, timeout=8)
                 return (time.perf_counter() - start_switch) * 1000
 
-            reset_provider_cli(binary, app, a)
-            run_tui_op(app, "provider_switch_a_to_b", record, switch_body)
+            if tui_enabled("provider_switch_a_to_b"):
+                reset_provider_cli(binary, app, a)
+                run_tui_op(app, "provider_switch_a_to_b", record, switch_body)
 
             def copy_delete_body(session: TuiSession) -> float:
                 copy_id_prefix = f"{a}-copy"
@@ -1693,7 +1789,8 @@ def benchmark_tui(metrics: Metrics, binary: Path, paths: Paths, iterations: int,
                     metrics.add("TUI", app, "provider_delete_copy", delete_ms)
                 return (time.perf_counter() - sequence_start) * 1000
 
-            run_tui_op(app, "provider_copy_delete_sequence", record, copy_delete_body)
+            if tui_enabled("provider_copy_delete_sequence"):
+                run_tui_op(app, "provider_copy_delete_sequence", record, copy_delete_body)
             try:
                 reset_provider_cli(binary, app, a)
             except Exception:
@@ -1730,13 +1827,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skill-rows", type=int, default=8)
     parser.add_argument("--skip-cli", action="store_true")
     parser.add_argument("--skip-tui", action="store_true")
+    parser.add_argument("--operation-set", choices=[OPERATION_SET_FULL, OPERATION_SET_CI_BLOCKING], default=OPERATION_SET_FULL)
     parser.add_argument("--real-env", action="store_true", help="Run against the real user environment after taking a snapshot. Default is a temporary sandbox.")
+    parser.add_argument("--redact-paths", action="store_true", help="Redact local filesystem paths from the JSON result.")
     parser.add_argument("--json-output", type=Path)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.real_env and os.environ.get("CI"):
+        print("--real-env is disabled when CI is set", file=sys.stderr)
+        return 2
+
     binary = args.binary.resolve()
     if not binary.exists():
         print(f"Binary not found: {binary}", file=sys.stderr)
@@ -1779,16 +1882,27 @@ def main() -> int:
         first_sessions = seed_data(paths, args.providers_per_app, args.usage_rows, args.sessions_per_app, args.mcp_rows, args.skill_rows)
         if not args.skip_cli:
             log("Running CLI benchmarks...")
-            benchmark_cli(metrics, binary, paths, args.iterations, args.warmup, first_sessions)
+            benchmark_cli(metrics, binary, paths, args.iterations, args.warmup, first_sessions, args.operation_set)
         if not args.skip_tui:
             log("Running TUI benchmarks...")
-            benchmark_tui(metrics, binary, paths, args.iterations, args.warmup)
+            benchmark_tui(metrics, binary, paths, args.iterations, args.warmup, args.operation_set)
         summaries = metrics.summaries()
+        if args.redact_paths:
+            replacements = {
+                str(binary): "<binary>",
+                str(repo_root()): "<repo>",
+            }
+            if env.root is not None:
+                replacements[str(env.root)] = "<sandbox>"
+            if snap is not None:
+                replacements[str(snap.root)] = "<snapshot>"
+            summaries = redact_summaries(summaries, replacements)
         result = {
-            "binary": str(binary),
+            "binary": display_path(binary, args.redact_paths),
+            "operationSet": args.operation_set,
             "environment": {
                 "mode": env.mode,
-                "sandboxRoot": str(env.root) if env.root is not None else None,
+                "sandboxRoot": display_path(env.root, args.redact_paths),
                 "snapshotRestored": False,
                 "sandboxCleaned": False,
             },

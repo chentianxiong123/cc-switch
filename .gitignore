@@ -27,6 +27,7 @@ skill.md
 scripts/*
 !scripts/generate_latest_json.py
 !scripts/benchmark_cc_switch.py
+!scripts/check_benchmark_thresholds.py
 
 .agent/
 .agents/
