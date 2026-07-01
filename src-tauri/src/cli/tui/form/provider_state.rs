@@ -158,6 +158,8 @@ impl ProviderAddFormState {
             claude_teammates_touched: false,
             claude_tool_search: false,
             claude_tool_search_touched: false,
+            claude_disable_auto_upgrade: false,
+            claude_disable_auto_upgrade_touched: false,
             codex_oauth_account_id: None,
             codex_fast_mode: false,
             codex_base_url: TextInput::new(codex_defaults.0),
@@ -434,6 +436,7 @@ impl ProviderAddFormState {
             fields.push(ProviderAddField::ClaudeHideAttribution);
             fields.push(ProviderAddField::ClaudeTeammates);
             fields.push(ProviderAddField::ClaudeToolSearch);
+            fields.push(ProviderAddField::ClaudeDisableAutoUpgrade);
         }
         fields.push(ProviderAddField::UsageQueryDivider);
         fields.push(ProviderAddField::UsageQuery);
@@ -543,6 +546,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::ClaudeTeammates
             | ProviderAddField::ClaudeToolSearch
+            | ProviderAddField::ClaudeDisableAutoUpgrade
             | ProviderAddField::GeminiAuthType
             | ProviderAddField::OpenClawApiProtocol
             | ProviderAddField::OpenClawUserAgent
@@ -600,6 +604,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::ClaudeTeammates
             | ProviderAddField::ClaudeToolSearch
+            | ProviderAddField::ClaudeDisableAutoUpgrade
             | ProviderAddField::GeminiAuthType
             | ProviderAddField::OpenClawApiProtocol
             | ProviderAddField::OpenClawUserAgent
@@ -1363,6 +1368,11 @@ impl ProviderAddFormState {
     pub fn toggle_claude_tool_search(&mut self) {
         self.claude_tool_search = !self.claude_tool_search;
         self.claude_tool_search_touched = true;
+    }
+
+    pub fn toggle_claude_disable_auto_upgrade(&mut self) {
+        self.claude_disable_auto_upgrade = !self.claude_disable_auto_upgrade;
+        self.claude_disable_auto_upgrade_touched = true;
     }
 
     pub fn toggle_codex_fast_mode(&mut self) {

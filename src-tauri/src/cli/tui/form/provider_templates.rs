@@ -429,6 +429,7 @@ impl ProviderAddFormState {
                     self.claude_hide_attribution = defaults.claude_hide_attribution;
                     self.claude_teammates = defaults.claude_teammates;
                     self.claude_tool_search = defaults.claude_tool_search;
+                    self.claude_disable_auto_upgrade = defaults.claude_disable_auto_upgrade;
                     self.codex_oauth_account_id = defaults.codex_oauth_account_id;
                     self.codex_fast_mode = defaults.codex_fast_mode;
                     self.codex_base_url = defaults.codex_base_url;
@@ -495,6 +496,8 @@ impl ProviderAddFormState {
                     self.claude_teammates_touched = false;
                     self.claude_tool_search = false;
                     self.claude_tool_search_touched = false;
+                    self.claude_disable_auto_upgrade = false;
+                    self.claude_disable_auto_upgrade_touched = false;
                 }
                 ProviderTemplateId::CodexOAuth => {
                     self.extra = json!({
@@ -527,6 +530,8 @@ impl ProviderAddFormState {
                     self.claude_teammates_touched = false;
                     self.claude_tool_search = false;
                     self.claude_tool_search_touched = false;
+                    self.claude_disable_auto_upgrade = false;
+                    self.claude_disable_auto_upgrade_touched = false;
                 }
                 ProviderTemplateId::OpenAiOfficial => {
                     self.extra = json!({

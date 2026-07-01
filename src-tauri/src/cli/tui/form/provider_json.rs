@@ -114,6 +114,13 @@ impl ProviderAddFormState {
                         env_obj.remove("ENABLE_TOOL_SEARCH");
                     }
                 }
+                if self.claude_disable_auto_upgrade_touched {
+                    if self.claude_disable_auto_upgrade {
+                        env_obj.insert("DISABLE_AUTOUPDATER".to_string(), json!("1"));
+                    } else {
+                        env_obj.remove("DISABLE_AUTOUPDATER");
+                    }
+                }
                 settings_obj.remove("api_format");
                 settings_obj.remove("apiFormat");
                 settings_obj.remove("openrouter_compat_mode");
@@ -965,6 +972,16 @@ pub(crate) fn claude_tool_search_enabled(settings_config: &Value) -> bool {
         return false;
     };
     value.as_str() == Some("true") || value.as_str() == Some("1")
+}
+
+pub(crate) fn claude_disable_auto_upgrade_enabled(settings_config: &Value) -> bool {
+    let Some(value) = settings_config
+        .get("env")
+        .and_then(|env| env.get("DISABLE_AUTOUPDATER"))
+    else {
+        return false;
+    };
+    value.as_str() == Some("1") || value.as_i64() == Some(1)
 }
 
 pub(crate) fn should_hide_provider_field(key: &str) -> bool {

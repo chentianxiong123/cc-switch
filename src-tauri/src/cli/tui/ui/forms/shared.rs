@@ -52,6 +52,7 @@ pub(crate) fn add_form_key_items(
                         | ProviderAddField::ClaudeHideAttribution
                         | ProviderAddField::ClaudeTeammates
                         | ProviderAddField::ClaudeToolSearch
+                        | ProviderAddField::ClaudeDisableAutoUpgrade
                         | ProviderAddField::CodexFastMode
                         | ProviderAddField::OpenClawApiProtocol
                         | ProviderAddField::OpenClawUserAgent

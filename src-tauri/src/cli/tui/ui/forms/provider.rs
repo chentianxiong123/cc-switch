@@ -1218,6 +1218,9 @@ pub(crate) fn provider_field_label_and_value(
         }
         ProviderAddField::ClaudeTeammates => texts::tui_label_claude_teammates().to_string(),
         ProviderAddField::ClaudeToolSearch => texts::tui_label_claude_tool_search().to_string(),
+        ProviderAddField::ClaudeDisableAutoUpgrade => {
+            texts::tui_label_claude_disable_auto_upgrade().to_string()
+        }
         ProviderAddField::CodexOAuthAccount => texts::tui_label_chatgpt_account().to_string(),
         ProviderAddField::CodexFastMode => texts::tui_label_codex_fast_mode().to_string(),
         ProviderAddField::CodexBaseUrl => texts::tui_label_base_url().to_string(),
@@ -1301,6 +1304,13 @@ pub(crate) fn provider_field_label_and_value(
         }
         ProviderAddField::ClaudeToolSearch => {
             if provider.claude_tool_search {
+                format!("[{}]", texts::tui_marker_active())
+            } else {
+                "[ ]".to_string()
+            }
+        }
+        ProviderAddField::ClaudeDisableAutoUpgrade => {
+            if provider.claude_disable_auto_upgrade {
                 format!("[{}]", texts::tui_marker_active())
             } else {
                 "[ ]".to_string()
@@ -1434,6 +1444,16 @@ pub(crate) fn provider_field_editor_line(
                     "env.ENABLE_TOOL_SEARCH = {}",
                     if provider.claude_tool_search {
                         "\"true\""
+                    } else {
+                        "<unset>"
+                    }
+                )
+            }
+            ProviderAddField::ClaudeDisableAutoUpgrade => {
+                format!(
+                    "env.DISABLE_AUTOUPDATER = {}",
+                    if provider.claude_disable_auto_upgrade {
+                        "\"1\""
                     } else {
                         "<unset>"
                     }

@@ -1088,6 +1088,48 @@ fn provider_add_form_claude_tool_search_round_trips_and_removes_when_toggled_off
 }
 
 #[test]
+fn provider_add_form_claude_disable_auto_upgrade_writes_upstream_shape() {
+    let mut form = ProviderAddFormState::new(AppType::Claude);
+    form.id.set("p1");
+    form.name.set("Provider One");
+    form.toggle_claude_disable_auto_upgrade();
+
+    let provider = form.to_provider_json_value();
+
+    assert_eq!(
+        provider["settingsConfig"]["env"]["DISABLE_AUTOUPDATER"],
+        json!("1")
+    );
+}
+
+#[test]
+fn provider_add_form_claude_disable_auto_upgrade_round_trips_and_removes_when_toggled_off() {
+    let provider = Provider::with_id(
+        "p1".to_string(),
+        "Provider One".to_string(),
+        json!({
+            "env": {
+                "DISABLE_AUTOUPDATER": "1"
+            }
+        }),
+        None,
+    );
+
+    let mut form = ProviderAddFormState::from_provider(AppType::Claude, &provider);
+    assert!(form.claude_disable_auto_upgrade);
+
+    form.toggle_claude_disable_auto_upgrade();
+    let out = form.to_provider_json_value();
+
+    assert!(
+        out["settingsConfig"]["env"]
+            .as_object()
+            .is_some_and(|env| !env.contains_key("DISABLE_AUTOUPDATER")),
+        "unchecked disable-auto-upgrade should remove the env flag"
+    );
+}
+
+#[test]
 fn provider_add_form_claude_preserves_existing_hidden_attribution_when_untouched() {
     let provider = Provider::with_id(
         "p1".to_string(),

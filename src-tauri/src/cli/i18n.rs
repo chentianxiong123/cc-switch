@@ -1870,6 +1870,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_label_claude_disable_auto_upgrade() -> &'static str {
+        if is_chinese() {
+            "禁用自动升级"
+        } else {
+            "Disable Auto-Upgrade"
+        }
+    }
+
     pub fn tui_label_chatgpt_account() -> &'static str {
         if is_chinese() {
             "ChatGPT 账号"

@@ -329,6 +329,13 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
                 "Enables Claude Code's Tool Search capability by writing env.ENABLE_TOOL_SEARCH=true; turning it off removes the variable.",
             ),
         ),
+        ProviderAddField::ClaudeDisableAutoUpgrade => HelpContent::new(
+            texts::tui_label_claude_disable_auto_upgrade(),
+            help_lines(
+                "禁用 Claude Code 的自动升级，写入 env.DISABLE_AUTOUPDATER=1；关闭时移除该变量。",
+                "Disables Claude Code's auto-upgrade by writing env.DISABLE_AUTOUPDATER=1; turning it off removes the variable.",
+            ),
+        ),
         ProviderAddField::CodexOAuthAccount => HelpContent::new(
             texts::tui_label_chatgpt_account(),
             help_lines(
