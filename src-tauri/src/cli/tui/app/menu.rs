@@ -127,7 +127,7 @@ impl App {
     pub(crate) fn nav_item_for_route(app_type: &AppType, route: &Route) -> NavItem {
         match route {
             Route::Main => NavItem::Main,
-            Route::Providers | Route::ProviderDetail { .. } => NavItem::Providers,
+            Route::Providers => NavItem::Providers,
             Route::Usage | Route::UsageLogs | Route::UsageLogDetail { .. } | Route::Pricing => {
                 NavItem::Usage
             }
@@ -747,7 +747,6 @@ impl App {
     pub(crate) fn on_content_key(&mut self, key: KeyEvent, data: &UiData) -> Action {
         match self.route.clone() {
             Route::Providers => self.on_providers_key(key, data),
-            Route::ProviderDetail { id } => self.on_provider_detail_key(key, data, &id),
             Route::Usage => self.on_usage_key(key, data),
             Route::UsageLogs => self.on_usage_logs_key(key, data),
             Route::UsageLogDetail { request_id } => self.on_usage_log_detail_key(key, &request_id),

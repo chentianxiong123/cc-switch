@@ -737,7 +737,6 @@ pub(crate) fn route_has_content_list(route: &Route) -> bool {
     matches!(
         route,
         Route::Providers
-            | Route::ProviderDetail { .. }
             | Route::Usage
             | Route::UsageLogs
             | Route::UsageLogDetail { .. }

@@ -211,7 +211,13 @@ impl App {
                 let Some(row) = visible.get(self.provider_idx) else {
                     return Action::None;
                 };
-                self.push_route_and_switch(Route::ProviderDetail { id: row.id.clone() })
+                // Enter opens the edit form directly (same as `e`).
+                if self.is_provider_read_only(row) {
+                    self.show_provider_read_only_toast();
+                    return Action::None;
+                }
+                self.open_provider_edit_form(row, data);
+                Action::None
             }
             KeyCode::Char('a') => {
                 self.open_provider_add_form(data);
@@ -301,61 +307,6 @@ impl App {
                 let Some(row) = visible.get(self.provider_idx) else {
                     return Action::None;
                 };
-                if data::quota_target_for_provider(&self.app_type, row).is_none() {
-                    self.push_toast(texts::tui_toast_quota_not_available(), ToastKind::Info);
-                    return Action::None;
-                }
-                Action::ProviderQuotaRefresh { id: row.id.clone() }
-            }
-            _ => Action::None,
-        }
-    }
-
-    pub(crate) fn on_provider_detail_key(
-        &mut self,
-        key: KeyEvent,
-        data: &UiData,
-        id: &str,
-    ) -> Action {
-        let Some(row) = data.providers.rows.iter().find(|p| p.id == id) else {
-            return Action::None;
-        };
-
-        match key.code {
-            KeyCode::Char('e') => {
-                if self.is_provider_read_only(row) {
-                    self.show_provider_read_only_toast();
-                    return Action::None;
-                }
-                self.open_provider_edit_form(row, data);
-                Action::None
-            }
-            KeyCode::Enter => Action::None,
-            KeyCode::Char('s') | KeyCode::Char(' ') => self.provider_switch_action(row),
-            KeyCode::Char('x') => self.provider_set_default_action(row),
-            KeyCode::Char('t') => {
-                self.open_provider_test_menu(row);
-                Action::None
-            }
-            KeyCode::Char('o') => {
-                if !supports_temporary_provider_launch(&self.app_type) {
-                    return Action::None;
-                }
-                Action::ProviderLaunchTemporary { id: row.id.clone() }
-            }
-            KeyCode::Char('f') => {
-                if !supports_failover_controls(&self.app_type) {
-                    return Action::None;
-                }
-                let selected = failover_queue_rows(data)
-                    .iter()
-                    .position(|provider_row| provider_row.id == row.id)
-                    .unwrap_or(0);
-                self.overlay = Overlay::FailoverQueueManager { selected };
-                Action::None
-            }
-            KeyCode::Char('<') | KeyCode::Char('>') => Action::None,
-            KeyCode::Char('r') => {
                 if data::quota_target_for_provider(&self.app_type, row).is_none() {
                     self.push_toast(texts::tui_toast_quota_not_available(), ToastKind::Info);
                     return Action::None;
@@ -765,45 +716,9 @@ mod tests {
     }
 
     #[test]
-    fn claude_provider_detail_o_key_requests_temporary_launch() {
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
-        app.focus = Focus::Content;
-
-        let mut data = UiData::default();
-        data.providers.rows.push(provider_row("p1"));
-
-        let action = app.on_key(key(KeyCode::Char('o')), &data);
-        assert!(matches!(
-            action,
-            Action::ProviderLaunchTemporary { id } if id == "p1"
-        ));
-    }
-
-    #[test]
     fn codex_provider_o_key_requests_temporary_launch() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
-        app.focus = Focus::Content;
-
-        let mut data = UiData::default();
-        data.providers.rows.push(provider_row("p1"));
-
-        let action = app.on_key(key(KeyCode::Char('o')), &data);
-        assert!(matches!(
-            action,
-            Action::ProviderLaunchTemporary { id } if id == "p1"
-        ));
-    }
-
-    #[test]
-    fn codex_provider_detail_o_key_requests_temporary_launch() {
-        let mut app = App::new(Some(AppType::Codex));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
         app.focus = Focus::Content;
 
         let mut data = UiData::default();
@@ -848,21 +763,6 @@ mod tests {
     fn non_claude_provider_o_key_is_noop() {
         let mut app = App::new(Some(AppType::Gemini));
         app.route = Route::Providers;
-        app.focus = Focus::Content;
-
-        let mut data = UiData::default();
-        data.providers.rows.push(provider_row("p1"));
-
-        let action = app.on_key(key(KeyCode::Char('o')), &data);
-        assert!(matches!(action, Action::None));
-    }
-
-    #[test]
-    fn non_claude_provider_detail_o_key_is_noop() {
-        let mut app = App::new(Some(AppType::Gemini));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
         app.focus = Focus::Content;
 
         let mut data = UiData::default();

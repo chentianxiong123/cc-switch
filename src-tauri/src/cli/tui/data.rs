@@ -57,9 +57,14 @@ pub struct ProviderRow {
     pub api_url: Option<String>,
     pub is_current: bool,
     pub is_in_config: bool,
+    // Tracked in the snapshot and asserted in tests, but no longer surfaced in any
+    // view since the provider detail page was removed (Enter now opens edit directly).
+    #[allow(dead_code)]
     pub is_saved: bool,
     pub is_default_model: bool,
     pub primary_model_id: Option<String>,
+    // See `is_saved`: retained for the OpenClaw default-model resolution and its tests.
+    #[allow(dead_code)]
     pub default_model_id: Option<String>,
 }
 

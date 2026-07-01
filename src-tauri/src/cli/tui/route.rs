@@ -9,7 +9,6 @@ pub enum Route {
     UsageLogDetail { request_id: String },
     Pricing,
     Sessions,
-    ProviderDetail { id: String },
     Mcp,
     Prompts,
     HermesMemory,

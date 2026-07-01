@@ -37,7 +37,6 @@ fn normalize_route_for_app(app_type: &AppType, route: &super::route::Route) -> s
         AppType::OpenClaw => match route {
             super::route::Route::Main
             | super::route::Route::Providers
-            | super::route::Route::ProviderDetail { .. }
             | super::route::Route::Usage
             | super::route::Route::UsageLogs
             | super::route::Route::UsageLogDetail { .. }
@@ -56,7 +55,6 @@ fn normalize_route_for_app(app_type: &AppType, route: &super::route::Route) -> s
         AppType::Hermes => match route {
             super::route::Route::Main
             | super::route::Route::Providers
-            | super::route::Route::ProviderDetail { .. }
             | super::route::Route::Usage
             | super::route::Route::UsageLogs
             | super::route::Route::UsageLogDetail { .. }

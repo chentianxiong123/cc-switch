@@ -3,38 +3,6 @@ use crate::cli::tui::data;
 
 use super::*;
 
-fn openclaw_status_label(row: &ProviderRow) -> &'static str {
-    if row.is_default_model {
-        texts::tui_openclaw_status_default()
-    } else if row.is_in_config {
-        texts::tui_openclaw_status_in_config_and_saved()
-    } else if row.is_saved {
-        texts::tui_openclaw_status_saved_only()
-    } else {
-        texts::tui_openclaw_status_untracked()
-    }
-}
-
-fn opencode_status_label(row: &ProviderRow) -> &'static str {
-    if row.is_in_config {
-        texts::tui_provider_status_in_config()
-    } else if row.is_saved {
-        texts::tui_provider_status_saved_only()
-    } else {
-        texts::tui_provider_status_untracked()
-    }
-}
-
-fn additive_status_label(app_type: &AppType, row: &ProviderRow) -> &'static str {
-    if matches!(app_type, AppType::Hermes) && row.is_default_model {
-        texts::tui_provider_status_in_use()
-    } else if row.is_default_model {
-        texts::tui_openclaw_status_default()
-    } else {
-        opencode_status_label(row)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderProxyBadge {
     NeedsProxy,
@@ -270,7 +238,6 @@ pub(super) fn render_providers(
         } else if visible.is_empty() {
             keys.push(("a", texts::tui_key_add()));
         } else {
-            keys.push(("Enter", texts::tui_key_details()));
             keys.push(("Space", provider_switch_key_label(&app.app_type)));
             keys.push(("a", texts::tui_key_add()));
             // Theoretically we should use "duplicate" here.
@@ -370,238 +337,6 @@ pub(super) fn render_providers(
     state.select(Some(app.provider_idx));
 
     frame.render_stateful_widget(table, inset_left(chunks[1], CONTENT_INSET_LEFT), &mut state);
-}
-
-pub(super) fn render_provider_detail(
-    frame: &mut Frame<'_>,
-    app: &App,
-    data: &UiData,
-    area: Rect,
-    theme: &super::theme::Theme,
-    id: &str,
-) {
-    let Some(row) = data.providers.rows.iter().find(|p| p.id == id) else {
-        frame.render_widget(
-            Paragraph::new(texts::tui_provider_not_found()).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Plain)
-                    .border_style(pane_border_style(app, Focus::Content, theme))
-                    .title(texts::tui_provider_title()),
-            ),
-            area,
-        );
-        return;
-    };
-
-    let outer = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(texts::tui_provider_detail_title());
-    frame.render_widget(outer.clone(), area);
-    let inner = outer.inner(area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(inner);
-
-    if app.focus == Focus::Content {
-        let mut keys = vec![("Space", provider_switch_key_label(&app.app_type))];
-        if !data::provider_is_read_only(&app.app_type, row) {
-            keys.push(("e", texts::tui_key_edit()));
-        }
-        keys.push(("t", texts::tui_key_test()));
-        if data::quota_target_for_provider(&app.app_type, row).is_some() {
-            keys.push(("r", texts::tui_key_refresh()));
-        }
-        if matches!(app.app_type, AppType::OpenClaw | AppType::Hermes) && row.is_in_config {
-            keys.push(("x", provider_default_key_label(&app.app_type)));
-        }
-        if crate::cli::tui::app::supports_temporary_provider_launch(&app.app_type) {
-            keys.push(("o", texts::tui_key_launch_temp()));
-        }
-        if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
-            keys.push(("f", texts::tui_key_failover()));
-        }
-        render_key_bar_center(frame, chunks[0], theme, &keys);
-    }
-
-    let mut lines = vec![
-        Line::from(vec![
-            Span::styled(texts::tui_label_id(), Style::default().fg(theme.accent)),
-            Span::raw(": "),
-            Span::raw(row.id.clone()),
-        ]),
-        Line::from(vec![
-            Span::styled(texts::header_name(), Style::default().fg(theme.accent)),
-            Span::raw(": "),
-            Span::raw(data::provider_display_name(&app.app_type, row)),
-        ]),
-    ];
-
-    if let Some(badge) = provider_proxy_badge(&app.app_type, row) {
-        lines.push(Line::from(vec![
-            Span::styled(
-                texts::tui_label_provider_proxy(),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::styled(badge.label(), provider_proxy_badge_style(badge, theme)),
-        ]));
-    }
-
-    lines.push(Line::raw(""));
-
-    if let Some(url) = row.api_url.as_deref() {
-        lines.push(Line::from(vec![
-            Span::styled(
-                texts::tui_label_api_url(),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(url),
-        ]));
-    }
-
-    if matches!(app.app_type, crate::app_config::AppType::OpenClaw) {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                texts::tui_label_openclaw_status(),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(openclaw_status_label(row)),
-        ]));
-        if let Some(model_id) = row
-            .default_model_id
-            .as_deref()
-            .or(row.primary_model_id.as_deref())
-        {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    texts::tui_label_openclaw_model(),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::raw(": "),
-                Span::raw(model_id),
-            ]));
-        }
-    }
-
-    if matches!(app.app_type, AppType::OpenCode | AppType::Hermes) {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                texts::tui_label_provider_config_status(),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(additive_status_label(&app.app_type, row)),
-        ]));
-    }
-
-    if matches!(app.app_type, crate::app_config::AppType::Claude) {
-        lines.push(Line::from(vec![
-            Span::styled(
-                texts::tui_label_claude_hide_attribution(),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(
-                if crate::cli::tui::form::claude_hide_attribution_enabled(
-                    &row.provider.settings_config,
-                ) {
-                    texts::tui_marker_active()
-                } else {
-                    texts::tui_marker_inactive()
-                },
-            ),
-        ]));
-
-        if let Some(env) = row
-            .provider
-            .settings_config
-            .get("env")
-            .and_then(|v| v.as_object())
-        {
-            let api_key = env
-                .get("ANTHROPIC_AUTH_TOKEN")
-                .or_else(|| env.get("ANTHROPIC_API_KEY"))
-                .and_then(|v| v.as_str())
-                .map(mask_api_key)
-                .unwrap_or_else(|| texts::tui_na().to_string());
-            let base_url = env
-                .get("ANTHROPIC_BASE_URL")
-                .and_then(|v| v.as_str())
-                .unwrap_or(texts::tui_na());
-
-            lines.push(Line::raw(""));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    texts::tui_label_base_url(),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::raw(": "),
-                Span::raw(base_url),
-            ]));
-            let api_format = crate::proxy::providers::get_claude_api_format(&row.provider);
-
-            lines.push(Line::from(vec![
-                Span::styled(
-                    texts::tui_label_claude_api_format(),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::raw(": "),
-                Span::raw(texts::tui_claude_api_format_value(api_format)),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    texts::tui_label_api_key(),
-                    Style::default().fg(theme.accent),
-                ),
-                Span::raw(": "),
-                Span::raw(api_key),
-            ]));
-        }
-    }
-
-    if crate::cli::tui::app::supports_failover_controls(&app.app_type) {
-        lines.push(Line::raw(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                crate::t!("Failover queue", "故障转移队列"),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(failover_queue_position(data, &row.id).map_or_else(
-                || crate::t!("Not in queue", "未加入队列").to_string(),
-                |position| format!("{} #{position}", crate::t!("Queued", "已加入")),
-            )),
-        ]));
-        lines.push(Line::from(vec![
-            Span::styled(
-                crate::t!("Queue ordering", "队列排序"),
-                Style::default().fg(theme.accent),
-            ),
-            Span::raw(": "),
-            Span::raw(crate::t!(
-                "Uses provider order; moving queue entries can also reorder providers.",
-                "使用供应商顺序；移动队列项也可能重排供应商。"
-            )),
-        ]));
-    }
-
-    lines.extend(quota_detail_lines(app, data, row, theme));
-
-    frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::default().borders(Borders::NONE))
-            .wrap(Wrap { trim: false }),
-        inset_left(chunks[1], CONTENT_INSET_LEFT),
-    );
 }
 
 #[cfg(test)]
@@ -781,23 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_provider_detail_marks_official_as_no_proxy_support() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-        let _lang = crate::cli::i18n::use_test_language(crate::cli::i18n::Language::English);
-
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "official".to_string(),
-        };
-        app.focus = Focus::Content;
-        let data = current_official_claude_data();
-        let all = all_text(&super::super::tests::render_with_size(&app, &data, 180, 40));
-
-        assert!(all.contains("Proxy: No Proxy Support"), "{all}");
-    }
-
-    #[test]
     fn codex_provider_list_marks_chat_wire_api_as_needing_proxy() {
         let _lock = super::super::tests::lock_env();
         let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
@@ -855,46 +573,6 @@ mod tests {
 
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
-        app.focus = Focus::Content;
-
-        let data = super::super::tests::minimal_data(&app.app_type);
-        let all = all_text(&super::super::tests::render(&app, &data));
-
-        assert!(
-            all.contains(&format!("o {}", texts::tui_key_launch_temp())),
-            "{all}"
-        );
-    }
-
-    #[test]
-    fn claude_provider_detail_key_bar_shows_launch_temp_hint() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
-        app.focus = Focus::Content;
-
-        let data = super::super::tests::minimal_data(&app.app_type);
-        let all = all_text(&super::super::tests::render(&app, &data));
-
-        assert!(
-            all.contains(&format!("o {}", texts::tui_key_launch_temp())),
-            "{all}"
-        );
-    }
-
-    #[test]
-    fn codex_provider_detail_key_bar_shows_launch_temp_hint() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-
-        let mut app = App::new(Some(AppType::Codex));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
         app.focus = Focus::Content;
 
         let data = super::super::tests::minimal_data(&app.app_type);
@@ -970,28 +648,6 @@ mod tests {
     }
 
     #[test]
-    fn official_provider_detail_shows_quota_details() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "official".to_string(),
-        };
-        app.focus = Focus::Content;
-        let data = current_official_claude_data();
-        let all = all_text(&super::super::tests::render(&app, &data));
-
-        assert!(all.contains(texts::tui_label_quota()), "{all}");
-        assert!(
-            all.contains(&format!("r {}", texts::tui_key_refresh())),
-            "{all}"
-        );
-        assert!(all.contains("5h: 42%"), "{all}");
-        assert!(all.contains("7d: 70%"), "{all}");
-    }
-
-    #[test]
     fn usage_script_quota_hides_default_plan_name_and_shows_checked_time() {
         let _lock = super::super::tests::lock_env();
         let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
@@ -1009,55 +665,6 @@ mod tests {
         assert!(!all.contains("default"), "{all}");
     }
 
-    #[test]
-    fn usage_script_quota_uses_chinese_checked_time() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-        let _lang = crate::cli::i18n::use_test_language(crate::cli::i18n::Language::Chinese);
-
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "usage-provider".to_string(),
-        };
-        app.focus = Focus::Content;
-        let data = usage_script_data();
-        let all = all_text(&super::super::tests::render_with_size(&app, &data, 180, 40));
-
-        assert!(all.contains("12 USD"), "{all}");
-        assert!(all.contains("秒 前"), "{all}");
-        assert!(!all.contains("default"), "{all}");
-    }
-
-    #[test]
-    fn usage_script_detail_empty_data_shows_not_available_once() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-        let _lang = crate::cli::i18n::use_test_language(crate::cli::i18n::Language::English);
-
-        let mut app = App::new(Some(AppType::Claude));
-        app.route = Route::ProviderDetail {
-            id: "usage-provider".to_string(),
-        };
-        app.focus = Focus::Content;
-        let mut data = usage_script_data();
-        let target =
-            data::quota_target_for_provider(&AppType::Claude, &data.providers.rows[0]).unwrap();
-        data.quota.finish(
-            target,
-            ProviderUsageQuota::Script(UsageResult {
-                success: true,
-                data: Some(Vec::new()),
-                error: None,
-            }),
-        );
-
-        let all = all_text(&super::super::tests::render_with_size(&app, &data, 180, 40));
-
-        assert!(all.contains(texts::tui_quota_not_available()), "{all}");
-        assert!(!all.contains(texts::tui_quota_ok()), "{all}");
-        assert_eq!(all.matches(texts::tui_label_quota()).count(), 1, "{all}");
-    }
-
     #[cfg(not(unix))]
     #[test]
     fn claude_provider_list_key_bar_hides_launch_temp_hint_on_non_unix() {
@@ -1066,27 +673,6 @@ mod tests {
 
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Providers;
-        app.focus = Focus::Content;
-
-        let data = super::super::tests::minimal_data(&app.app_type);
-        let all = all_text(&super::super::tests::render(&app, &data));
-
-        assert!(
-            !all.contains(&format!("o {}", texts::tui_key_launch_temp())),
-            "{all}"
-        );
-    }
-
-    #[cfg(not(unix))]
-    #[test]
-    fn codex_provider_detail_key_bar_hides_launch_temp_hint_on_non_unix() {
-        let _lock = super::super::tests::lock_env();
-        let _no_color = super::super::tests::EnvGuard::remove("NO_COLOR");
-
-        let mut app = App::new(Some(AppType::Codex));
-        app.route = Route::ProviderDetail {
-            id: "p1".to_string(),
-        };
         app.focus = Focus::Content;
 
         let data = super::super::tests::minimal_data(&app.app_type);

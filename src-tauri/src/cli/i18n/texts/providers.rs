@@ -770,14 +770,6 @@ pub fn tui_provider_title() -> &'static str {
     }
 }
 
-pub fn tui_provider_detail_title() -> &'static str {
-    if is_chinese() {
-        "供应商详情"
-    } else {
-        "Provider Detail"
-    }
-}
-
 pub fn tui_provider_add_title() -> &'static str {
     if is_chinese() {
         "新增供应商"
@@ -839,14 +831,6 @@ pub fn tui_provider_edit_title(name: &str) -> String {
         format!("编辑供应商: {name}")
     } else {
         format!("Edit Provider: {name}")
-    }
-}
-
-pub fn tui_provider_detail_keys() -> &'static str {
-    if is_chinese() {
-        "按键：Space=切换  e=编辑  t=测试"
-    } else {
-        "Keys: Space=switch  e=edit  t=test"
     }
 }
 
@@ -1340,9 +1324,9 @@ pub fn tui_key_deactivate_active() -> &'static str {
 
 pub fn tui_provider_list_keys() -> &'static str {
     if is_chinese() {
-        "按键：a=新增  e=编辑  Enter=详情  Space=切换  /=搜索"
+        "按键：a=新增  e=编辑  Space=切换  /=搜索"
     } else {
-        "Keys: a=add  e=edit  Enter=details  Space=switch  /=filter"
+        "Keys: a=add  e=edit  Space=switch  /=filter"
     }
 }
 

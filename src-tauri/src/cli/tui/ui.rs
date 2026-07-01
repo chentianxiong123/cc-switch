@@ -157,9 +157,6 @@ fn render_content(
     match &app.route {
         Route::Main => render_main(frame, app, data, content_area, theme),
         Route::Providers => render_providers(frame, app, data, content_area, theme),
-        Route::ProviderDetail { id } => {
-            render_provider_detail(frame, app, data, content_area, theme, id)
-        }
         Route::Usage => render_usage(frame, app, data, content_area, theme),
         Route::UsageLogs => render_usage_logs(frame, app, data, content_area, theme),
         Route::UsageLogDetail { request_id } => {

@@ -40,17 +40,6 @@ use crate::{
 };
 
 #[test]
-fn mask_api_key_handles_multibyte_safely() {
-    let short = "你你你"; // 3 chars, 9 bytes
-    let masked = super::mask_api_key(short);
-    assert_eq!(masked, short);
-
-    let long = "你".repeat(9);
-    let masked = super::mask_api_key(&long);
-    assert!(masked.ends_with("..."));
-}
-
-#[test]
 fn provider_form_shows_full_api_key_in_table_value() {
     let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
     form.claude_api_key.set("sk-test-1234567890");
@@ -1208,36 +1197,6 @@ fn provider_form_usage_query_page_omits_duplicate_side_panel_status_and_inline_k
     assert!(!all.contains("Preset template:"), "{all}");
     assert!(!all.contains("Enable usage query:"), "{all}");
     assert!(!all.contains("Enter edits text"), "{all}");
-}
-
-#[test]
-fn provider_detail_uses_legacy_claude_api_format_for_display() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].provider = Provider::with_id(
-        "p1".to_string(),
-        "Demo Provider".to_string(),
-        json!({
-            "env": {
-                "ANTHROPIC_BASE_URL": "https://example.com"
-            },
-            "api_format": "openai_chat"
-        }),
-        None,
-    );
-
-    let buf = render(&app, &data);
-    let all = all_text(&buf);
-
-    assert!(all.contains("OpenAI Chat Completions"));
 }
 
 #[test]
@@ -4901,52 +4860,6 @@ fn speedtest_running_overlay_is_compact_and_centered() {
 }
 
 #[test]
-fn stream_check_running_overlay_is_compact_and_centered() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    app.overlay = Overlay::StreamCheckRunning {
-        provider_id: "p1".to_string(),
-        provider_name: "Demo".to_string(),
-    };
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let message = texts::tui_stream_check_running("Demo");
-    let row_index = (0..buf.area.height)
-        .find(|&y| line_at(&buf, y).contains(&message))
-        .expect("stream check running message should be rendered");
-    let row = line_at(&buf, row_index);
-    let msg_start = row.find(&message).expect("message should be present");
-    let left_border = row[..msg_start]
-        .rfind('│')
-        .expect("message row should have left border");
-    let right_border_offset = row[msg_start + message.len()..]
-        .find('│')
-        .expect("message row should have right border");
-    let right_border = msg_start + message.len() + right_border_offset;
-    let overlay_width = right_border.saturating_sub(left_border).saturating_add(1);
-
-    assert!(
-        msg_start.saturating_sub(left_border) > 2,
-        "message should not hug left border: {row:?}"
-    );
-    assert!(
-        right_border.saturating_sub(msg_start + message.len()) > 2,
-        "message should not hug right border: {row:?}"
-    );
-    assert!(
-        overlay_width < super::OVERLAY_FIXED_MD.0 as usize,
-        "short running overlay should be compact, got width {overlay_width}"
-    );
-}
-
-#[test]
 fn speedtest_result_overlay_is_compact_when_lines_are_short() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -4998,57 +4911,6 @@ fn speedtest_result_overlay_is_compact_when_lines_are_short() {
 }
 
 #[test]
-fn stream_check_result_overlay_is_compact_when_lines_are_short() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    app.overlay = Overlay::StreamCheckResult {
-        provider_name: "Packy".to_string(),
-        lines: vec![
-            texts::tui_stream_check_line_provider("Packy"),
-            texts::tui_stream_check_line_status("OK"),
-            texts::tui_stream_check_line_response_time("367 ms"),
-            texts::tui_stream_check_line_http_status("200"),
-        ],
-        scroll: 0,
-    };
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let row_index = (0..buf.area.height)
-        .find(|&y| line_at(&buf, y).contains("367 ms"))
-        .expect("stream check result should be rendered");
-    let row = line_at(&buf, row_index);
-    let msg_start = row.find("367 ms").expect("message should be present");
-    let left_border = row[..msg_start]
-        .rfind('│')
-        .expect("message row should have left border");
-    let right_border_offset = row[msg_start + "367 ms".len()..]
-        .find('│')
-        .expect("message row should have right border");
-    let right_border = msg_start + "367 ms".len() + right_border_offset;
-    let overlay_width = right_border.saturating_sub(left_border).saturating_add(1);
-
-    assert!(
-        msg_start.saturating_sub(left_border) > 2,
-        "result should not hug left border: {row:?}"
-    );
-    assert!(
-        right_border.saturating_sub(msg_start + "367 ms".len()) > 2,
-        "result should not hug right border: {row:?}"
-    );
-    assert!(
-        overlay_width < 70,
-        "short result overlay should be compact, got width {overlay_width}"
-    );
-}
-
-#[test]
 fn speedtest_result_overlay_leaves_gap_below_keybar() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -5074,37 +4936,6 @@ fn speedtest_result_overlay_leaves_gap_below_keybar() {
         .expect("key row should be rendered");
     let content_row = (0..buf.area.height)
         .find(|&y| line_at(&buf, y).contains("https://ww.packyapi.com"))
-        .expect("content row should be rendered");
-
-    assert!(
-            content_row > key_row + 1,
-            "content should leave a blank row below key hints: key_row={key_row}, content_row={content_row}"
-        );
-}
-
-#[test]
-fn stream_check_running_overlay_leaves_gap_below_keybar() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    app.overlay = Overlay::StreamCheckRunning {
-        provider_id: "p1".to_string(),
-        provider_name: "Demo".to_string(),
-    };
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let message = texts::tui_stream_check_running("Demo");
-    let key_row = (0..buf.area.height)
-        .find(|&y| line_at(&buf, y).contains("Esc"))
-        .expect("key row should be rendered");
-    let content_row = (0..buf.area.height)
-        .find(|&y| line_at(&buf, y).contains(&message))
         .expect("content row should be rendered");
 
     assert!(
@@ -8691,31 +8522,6 @@ fn provider_form_model_field_enter_hint_uses_fetch_model() {
 }
 
 #[test]
-fn provider_detail_key_bar_shows_test_hint() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let mut all = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            all.push_str(buf[(x, y)].symbol());
-        }
-        all.push('\n');
-    }
-
-    assert!(all.contains("t test"));
-    assert!(!all.contains("c stream check"));
-}
-
-#[test]
 fn openclaw_provider_list_key_bar_shows_test_hint_only() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -8969,85 +8775,6 @@ fn opencode_provider_list_marks_rows_in_config_without_current_marker() {
 }
 
 #[test]
-fn openclaw_provider_detail_key_bar_shows_test_hint_only() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let mut all = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            all.push_str(buf[(x, y)].symbol());
-        }
-        all.push('\n');
-    }
-
-    assert!(all.contains("t test"));
-    assert!(!all.contains("speedtest"));
-    assert!(!all.contains("stream check"));
-}
-
-#[test]
-fn openclaw_provider_detail_key_bar_uses_common_provider_actions() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let mut all = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            all.push_str(buf[(x, y)].symbol());
-        }
-        all.push('\n');
-    }
-
-    assert!(all.contains("Space add/remove"), "{all}");
-    assert!(all.contains("t test"), "{all}");
-    assert!(all.contains("x set default"), "{all}");
-    assert!(!all.contains("s add/remove"), "{all}");
-}
-
-#[test]
-fn opencode_provider_detail_key_bar_uses_config_membership_actions() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenCode));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    let data = minimal_data(&app.app_type);
-
-    let all = all_text(&render(&app, &data));
-
-    assert!(all.contains("Space add/remove"), "{all}");
-    assert!(all.contains("t test"), "{all}");
-    assert!(!all.contains("s add/remove"), "{all}");
-    assert!(!all.contains("c stream check"), "{all}");
-    assert!(
-        all.contains(texts::tui_label_provider_config_status()),
-        "{all}"
-    );
-    assert!(!all.contains("s switch"), "{all}");
-    assert!(!all.contains("x set default"), "{all}");
-}
-
-#[test]
 fn openclaw_provider_list_key_bar_shows_edit_for_tracked_provider() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -9087,53 +8814,6 @@ fn hermes_provider_list_key_bar_hides_edit_delete_for_read_only_provider() {
 }
 
 #[test]
-fn openclaw_provider_detail_key_bar_shows_edit_for_tracked_provider() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let buf = render(&app, &minimal_data(&app.app_type));
-    let all = all_text(&buf);
-
-    assert!(all.contains("e edit"), "{all}");
-    assert!(all.contains("x set default"), "{all}");
-}
-
-#[test]
-fn openclaw_provider_detail_shows_actual_default_model_id() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].is_default_model = true;
-    data.providers.rows[0].primary_model_id = Some("primary-model".to_string());
-    data.providers.rows[0].default_model_id = Some("fallback-model".to_string());
-
-    let buf = render(&app, &data);
-    let mut all = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            all.push_str(buf[(x, y)].symbol());
-        }
-        all.push('\n');
-    }
-
-    assert!(all.contains("fallback-model"));
-    assert!(!all.contains("Model: primary-model"));
-}
-
-#[test]
 fn openclaw_tui_provider_list_uses_saved_name_not_model_name() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -9162,38 +8842,6 @@ fn openclaw_tui_provider_list_uses_saved_name_not_model_name() {
 }
 
 #[test]
-fn openclaw_tui_provider_detail_uses_saved_name_and_keeps_model_separate() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].provider = Provider::with_id(
-        "p1".to_string(),
-        "Saved Snapshot Name".to_string(),
-        json!({
-            "api": "openai-completions",
-            "models": [
-                {"id": "live-model", "name": "Live Model Name"}
-            ]
-        }),
-        None,
-    );
-    data.providers.rows[0].primary_model_id = Some("live-model".to_string());
-
-    let all = all_text(&render(&app, &data));
-
-    assert!(all.contains("Saved Snapshot Name"), "{all}");
-    assert!(all.contains("live-model"), "{all}");
-    assert!(!all.contains("Name: Live Model Name"), "{all}");
-}
-
-#[test]
 fn openclaw_tui_provider_search_uses_saved_name_not_model_name() {
     let mut app = App::new(Some(AppType::OpenClaw));
     app.filter.input.set("live model".to_string());
@@ -9215,111 +8863,6 @@ fn openclaw_tui_provider_search_uses_saved_name_not_model_name() {
 
     app.filter.input.set("saved snapshot".to_string());
     assert_eq!(super::provider_rows_filtered(&app, &data).len(), 1);
-}
-
-#[test]
-fn openclaw_provider_detail_localizes_status_copy_in_chinese() {
-    let _lock = lock_env();
-    let _lang = use_test_language(Language::Chinese);
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].is_default_model = true;
-    data.providers.rows[0].default_model_id = Some("fallback-model".to_string());
-
-    let all = all_text(&render(&app, &data));
-    let compact = all.replace(' ', "");
-
-    assert!(compact.contains("状态:默认"), "{all}");
-    assert!(compact.contains("模型:fallback-model"), "{all}");
-    assert!(!all.contains("Status"), "{all}");
-    assert!(!all.contains("Model:"), "{all}");
-}
-
-#[test]
-fn openclaw_provider_detail_localizes_tracked_status_in_chinese() {
-    let _lock = lock_env();
-    let _lang = use_test_language(Language::Chinese);
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].is_default_model = false;
-    data.providers.rows[0].is_in_config = true;
-    data.providers.rows[0].is_saved = true;
-
-    let all = all_text(&render(&app, &data));
-    let compact = all.replace(' ', "");
-
-    assert!(compact.contains("状态:配置中+已保存"), "{all}");
-    assert!(!all.contains("Status"), "{all}");
-}
-
-#[test]
-fn openclaw_provider_detail_treats_live_only_status_as_tracked_copy() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].is_default_model = false;
-    data.providers.rows[0].is_in_config = true;
-    data.providers.rows[0].is_saved = false;
-
-    let all = all_text(&render(&app, &data));
-
-    assert!(
-        all.contains(texts::tui_openclaw_status_in_config_and_saved()),
-        "{all}"
-    );
-    assert!(
-        !all.contains(texts::tui_openclaw_status_live_only()),
-        "{all}"
-    );
-}
-
-#[test]
-fn openclaw_provider_detail_reports_saved_only_status_truthfully() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let mut data = minimal_data(&app.app_type);
-    data.providers.rows[0].is_default_model = false;
-    data.providers.rows[0].is_in_config = false;
-    data.providers.rows[0].is_saved = true;
-
-    let all = all_text(&render(&app, &data));
-
-    assert!(
-        all.contains(texts::tui_openclaw_status_saved_only()),
-        "{all}"
-    );
-    assert!(
-        !all.contains(texts::tui_openclaw_status_in_config_and_saved()),
-        "{all}"
-    );
 }
 
 #[test]
@@ -9390,56 +8933,4 @@ fn openclaw_provider_list_key_bar_localizes_actions_in_chinese() {
     assert!(!compact.contains("s添加/移除"), "{all}");
     assert!(!all.contains("add/remove"), "{all}");
     assert!(!all.contains("set default"), "{all}");
-}
-
-#[test]
-fn openclaw_provider_detail_key_bar_localizes_actions_in_chinese() {
-    let _lock = lock_env();
-    let _lang = use_test_language(Language::Chinese);
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::OpenClaw));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-
-    let all = all_text(&render(&app, &minimal_data(&app.app_type)));
-    let compact = all.replace(' ', "");
-
-    assert!(compact.contains("Space添加/移除"), "{all}");
-    assert!(compact.contains("t测试"), "{all}");
-    assert!(compact.contains("x设为默认"), "{all}");
-    assert!(!compact.contains("Space切换"), "{all}");
-    assert!(!compact.contains("s添加/移除"), "{all}");
-    assert!(!all.contains("add/remove"), "{all}");
-    assert!(!all.contains("set default"), "{all}");
-}
-
-#[test]
-fn provider_detail_keys_line_does_not_include_q_back() {
-    let _lock = lock_env();
-    let _no_color = EnvGuard::remove("NO_COLOR");
-
-    let mut app = App::new(Some(AppType::Claude));
-    app.route = Route::ProviderDetail {
-        id: "p1".to_string(),
-    };
-    app.focus = Focus::Content;
-    let data = minimal_data(&app.app_type);
-
-    let buf = render(&app, &data);
-    let mut all = String::new();
-    for y in 0..buf.area.height {
-        for x in 0..buf.area.width {
-            all.push_str(buf[(x, y)].symbol());
-        }
-        all.push('\n');
-    }
-
-    assert!(all.contains("t test"));
-    assert!(
-        !all.contains("q=back"),
-        "provider detail inline keys should not include q=back"
-    );
 }
