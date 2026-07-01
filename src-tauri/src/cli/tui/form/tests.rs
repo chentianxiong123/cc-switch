@@ -254,8 +254,10 @@ fn provider_add_form_codex_deepseek_template_matches_upstream_preset_values() {
 
     let fields = form.fields();
     assert!(fields.contains(&ProviderAddField::CodexBaseUrl));
-    assert!(fields.contains(&ProviderAddField::CodexModel));
     assert!(fields.contains(&ProviderAddField::CodexApiKey));
+    // No standalone model field anymore (matches upstream); the model rides in
+    // the catalog / config.
+    assert!(!fields.contains(&ProviderAddField::CodexModel));
 
     let provider = form.to_provider_json_value();
     assert_eq!(provider["category"], "cn_official");
@@ -1124,10 +1126,10 @@ fn provider_add_form_codex_template_switch_clears_local_routing_state() {
 
     assert!(!form.codex_local_routing_enabled());
     assert_eq!(form.codex_local_routing_field_idx, 0);
-    // Responses format: no reasoning toggles, but model mapping stays available.
+    // Routing toggle off (no catalog): only the toggle row shows.
     assert_eq!(
         form.codex_local_routing_fields(),
-        vec![CodexLocalRoutingField::ModelCatalog]
+        vec![CodexLocalRoutingField::Enabled]
     );
     assert_eq!(form.codex_chat_reasoning, Default::default());
     assert!(form.codex_model_catalog.is_empty());
@@ -1587,25 +1589,36 @@ requires_openai_auth = true
 fn provider_add_form_codex_model_mapping_available_for_both_formats() {
     let mut form = ProviderAddFormState::new(AppType::Codex);
 
-    // Native Responses: model mapping only, no reasoning toggles.
+    // The routing toggle is the first field and gates everything; off by default.
+    assert_eq!(
+        form.codex_local_routing_fields(),
+        vec![CodexLocalRoutingField::Enabled]
+    );
+
+    // Enabled + Responses: model mapping only, no reasoning toggles.
+    form.codex_local_routing_enabled = true;
     form.claude_api_format = ClaudeApiFormat::OpenAiResponses;
     assert_eq!(
         form.codex_local_routing_fields(),
-        vec![CodexLocalRoutingField::ModelCatalog]
+        vec![
+            CodexLocalRoutingField::Enabled,
+            CodexLocalRoutingField::ModelCatalog,
+        ]
     );
 
-    // Chat: reasoning toggles appear alongside model mapping.
+    // Enabled + Chat: reasoning toggles appear alongside model mapping.
     form.claude_api_format = ClaudeApiFormat::OpenAiChat;
     assert_eq!(
         form.codex_local_routing_fields(),
         vec![
+            CodexLocalRoutingField::Enabled,
             CodexLocalRoutingField::SupportsThinking,
             CodexLocalRoutingField::SupportsEffort,
             CodexLocalRoutingField::ModelCatalog,
         ]
     );
 
-    // A native Responses provider persists its catalog (decoupled from routing).
+    // A native Responses provider with routing on persists its catalog.
     let mut responses_form = ProviderAddFormState::new(AppType::Codex);
     responses_form.id.set("custom");
     responses_form.name.set("Custom");
@@ -1613,6 +1626,7 @@ fn provider_add_form_codex_model_mapping_available_for_both_formats() {
         .codex_base_url
         .set("https://api.example.com/v1");
     responses_form.claude_api_format = ClaudeApiFormat::OpenAiResponses;
+    responses_form.codex_local_routing_enabled = true;
     responses_form
         .apply_codex_model_catalog_value(json!([{ "model": "MiniMax-M3" }]))
         .expect("catalog should apply");
@@ -1622,6 +1636,11 @@ fn provider_add_form_codex_model_mapping_available_for_both_formats() {
         saved["settingsConfig"]["modelCatalog"]["models"][0]["model"],
         "MiniMax-M3"
     );
+
+    // With routing off, the catalog is not persisted even if models were entered.
+    responses_form.codex_local_routing_enabled = false;
+    let saved_off = responses_form.to_provider_json_value();
+    assert!(saved_off["settingsConfig"].get("modelCatalog").is_none());
 }
 
 #[test]
@@ -1722,11 +1741,14 @@ requires_openai_auth = true
 
     let form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
 
-    assert!(form.codex_local_routing_enabled());
+    // Chat format is restored (drives proxy conversion). The routing/mapping
+    // toggle stays off here since the provider carries no model catalog.
+    assert!(form.codex_is_chat_format());
+    assert!(!form.codex_local_routing_enabled());
 }
 
 #[test]
-fn provider_add_form_codex_legacy_chat_wire_api_loads_as_local_route_mapping() {
+fn provider_add_form_codex_legacy_chat_wire_api_loads_as_chat_format() {
     let provider = Provider::with_id(
         "custom".to_string(),
         "Custom".to_string(),
@@ -1751,7 +1773,9 @@ requires_openai_auth = true
         .as_str()
         .expect("Codex config should be serialized");
 
-    assert!(form.codex_local_routing_enabled());
+    // Legacy wire_api=chat → apiFormat openai_chat (proxy converts); wire_api
+    // normalizes to responses. No catalog, so the mapping toggle stays off.
+    assert!(!form.codex_local_routing_enabled());
     assert_eq!(saved["meta"]["apiFormat"], "openai_chat");
     assert!(config.contains("wire_api = \"responses\""));
     assert!(!config.contains("wire_api = \"chat\""));
@@ -1764,6 +1788,7 @@ fn provider_add_form_codex_local_routing_saves_normalized_reasoning() {
     form.name.set("Custom");
     form.codex_base_url.set("https://api.example.com/v1");
     form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+    form.codex_local_routing_enabled = true;
 
     form.toggle_codex_reasoning_effort();
 

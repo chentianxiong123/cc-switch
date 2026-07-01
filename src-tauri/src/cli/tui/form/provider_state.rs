@@ -164,6 +164,7 @@ impl ProviderAddFormState {
             codex_api_key: TextInput::new(""),
             codex_chat_reasoning: CodexChatReasoningConfig::default(),
             codex_model_catalog: Vec::new(),
+            codex_local_routing_enabled: false,
             gemini_auth_type: GeminiAuthType::ApiKey,
             gemini_api_key: TextInput::new(""),
             gemini_base_url: TextInput::new("https://generativelanguage.googleapis.com"),
@@ -377,8 +378,10 @@ impl ProviderAddFormState {
             AppType::Codex => {
                 if !self.is_codex_official_provider() {
                     fields.push(ProviderAddField::CodexBaseUrl);
-                    fields.push(ProviderAddField::CodexModel);
                     fields.push(ProviderAddField::CodexApiKey);
+                    // No standalone model field (matches upstream): the model is
+                    // configured via 模型映射 / the catalog, falling back to the
+                    // default when empty.
                     fields.push(ProviderAddField::CodexAdvancedDivider);
                     // Upstream format is an independent picker; local routing /
                     // model mapping is decoupled from it.
@@ -805,15 +808,17 @@ impl ProviderAddFormState {
     }
 
     pub fn codex_local_routing_fields(&self) -> Vec<CodexLocalRoutingField> {
-        // The routing on/off is now driven by the upstream-format picker, so the
-        // sub-page no longer carries an `Enabled` toggle. Reasoning capability
-        // only applies to the Chat format; model mapping applies to both.
-        let mut fields = Vec::new();
+        // The "需要本地路由映射" toggle gates everything (decoupled from the
+        // upstream format). When on, reasoning shows only for Chat, and the
+        // model-mapping table is available for both formats.
+        let mut fields = vec![CodexLocalRoutingField::Enabled];
         if self.codex_local_routing_enabled() {
-            fields.push(CodexLocalRoutingField::SupportsThinking);
-            fields.push(CodexLocalRoutingField::SupportsEffort);
+            if self.codex_is_chat_format() {
+                fields.push(CodexLocalRoutingField::SupportsThinking);
+                fields.push(CodexLocalRoutingField::SupportsEffort);
+            }
+            fields.push(CodexLocalRoutingField::ModelCatalog);
         }
-        fields.push(CodexLocalRoutingField::ModelCatalog);
         fields
     }
 
@@ -828,11 +833,8 @@ impl ProviderAddFormState {
     }
 
     pub fn toggle_codex_local_routing_enabled(&mut self) {
-        self.claude_api_format = if self.codex_local_routing_enabled() {
-            ClaudeApiFormat::OpenAiResponses
-        } else {
-            ClaudeApiFormat::OpenAiChat
-        };
+        // Independent of the upstream format: just flip the routing/mapping gate.
+        self.codex_local_routing_enabled = !self.codex_local_routing_enabled;
         let len = self.codex_local_routing_fields().len();
         self.codex_local_routing_field_idx = self
             .codex_local_routing_field_idx
@@ -1419,6 +1421,14 @@ impl ProviderAddFormState {
     pub fn codex_local_routing_enabled(&self) -> bool {
         matches!(self.app_type, AppType::Codex)
             && !self.is_codex_official_provider()
+            && self.codex_local_routing_enabled
+    }
+
+    /// Whether the Codex upstream format is Chat Completions (which needs proxy
+    /// conversion). Reasoning capability is Chat-only.
+    pub fn codex_is_chat_format(&self) -> bool {
+        matches!(self.app_type, AppType::Codex)
+            && !self.is_codex_official_provider()
             && matches!(self.claude_api_format, ClaudeApiFormat::OpenAiChat)
     }
 
@@ -1713,6 +1723,8 @@ impl ProviderAddFormState {
         if self.codex_model_catalog.is_empty() {
             self.codex_model_catalog_field = CodexModelCatalogField::Model;
         }
+        // Applying a catalog implies routing/mapping is on (mirrors load init).
+        self.codex_local_routing_enabled = !self.codex_model_catalog.is_empty();
         Ok(())
     }
 

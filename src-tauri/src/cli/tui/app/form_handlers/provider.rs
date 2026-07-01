@@ -431,6 +431,12 @@ impl App {
     ) -> Option<Action> {
         let (fields, selected) = self.prepare_codex_local_routing_field_selection()?;
 
+        // The model catalog is inline: when its "field" is focused, keys drive
+        // the table instead of the toggle/reasoning field list.
+        if matches!(selected, form::CodexLocalRoutingField::ModelCatalog) {
+            return self.handle_codex_inline_catalog_key(key);
+        }
+
         match key.code {
             KeyCode::Esc => {
                 let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
@@ -453,10 +459,104 @@ impl App {
                 };
                 provider.codex_local_routing_field_idx =
                     (provider.codex_local_routing_field_idx + 1).min(fields.len() - 1);
+                // Entering the inline catalog zone starts at the first row.
+                if matches!(
+                    fields.get(provider.codex_local_routing_field_idx),
+                    Some(form::CodexLocalRoutingField::ModelCatalog)
+                ) {
+                    provider.codex_model_catalog_idx = 0;
+                }
                 Some(Action::None)
             }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 Some(self.handle_codex_local_routing_field_activate(selected, data))
+            }
+            _ => None,
+        }
+    }
+
+    /// Keys for the inline model-catalog table (when its zone is focused inside
+    /// the model-mapping page). Up at the first row leaves back to the fields.
+    fn handle_codex_inline_catalog_key(&mut self, key: KeyEvent) -> Option<Action> {
+        match key.code {
+            KeyCode::Esc => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.close_codex_local_routing_page();
+                Some(Action::None)
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                if provider.codex_model_catalog_idx == 0 {
+                    provider.codex_local_routing_field_idx =
+                        provider.codex_local_routing_field_idx.saturating_sub(1);
+                } else {
+                    provider.codex_model_catalog_idx -= 1;
+                }
+                Some(Action::None)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                if !provider.codex_model_catalog.is_empty() {
+                    provider.codex_model_catalog_idx = (provider.codex_model_catalog_idx + 1)
+                        .min(provider.codex_model_catalog.len() - 1);
+                }
+                Some(Action::None)
+            }
+            KeyCode::Left => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.codex_model_catalog_field = form::CodexModelCatalogField::from_index(
+                    provider.codex_model_catalog_field.index().saturating_sub(1),
+                );
+                Some(Action::None)
+            }
+            KeyCode::Right => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.codex_model_catalog_field = form::CodexModelCatalogField::from_index(
+                    (provider.codex_model_catalog_field.index() + 1)
+                        .min(form::CodexModelCatalogField::ALL.len().saturating_sub(1)),
+                );
+                Some(Action::None)
+            }
+            KeyCode::Char('f') => Some(self.build_codex_model_catalog_fetch_action()),
+            KeyCode::Char('+') | KeyCode::Char('a') => {
+                self.open_codex_model_catalog_field_input(
+                    None,
+                    form::CodexModelCatalogField::Model,
+                    "",
+                );
+                Some(Action::None)
+            }
+            KeyCode::Enter => {
+                let (row, field, current) = match self.form.as_ref() {
+                    Some(FormState::ProviderAdd(provider))
+                        if !provider.codex_model_catalog.is_empty() =>
+                    {
+                        let row = provider.codex_model_catalog_idx;
+                        let field = provider.codex_model_catalog_field;
+                        let current = provider.selected_codex_model_catalog_field_value(field);
+                        (Some(row), field, current)
+                    }
+                    _ => (None, form::CodexModelCatalogField::Model, String::new()),
+                };
+                self.open_codex_model_catalog_field_input(row, field, &current);
+                Some(Action::None)
+            }
+            KeyCode::Delete | KeyCode::Backspace => {
+                let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                    return None;
+                };
+                provider.remove_selected_codex_model_catalog_model();
+                Some(Action::None)
             }
             _ => None,
         }
@@ -469,14 +569,20 @@ impl App {
     ) -> Action {
         match selected {
             form::CodexLocalRoutingField::Enabled => {
-                let enabled = {
+                let (enabled, is_chat) = {
                     let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
                         return Action::None;
                     };
                     provider.toggle_codex_local_routing_enabled();
-                    provider.codex_local_routing_enabled()
+                    (
+                        provider.codex_local_routing_enabled(),
+                        provider.codex_is_chat_format(),
+                    )
                 };
+                // Only Chat routing goes through the local proxy; native
+                // Responses mapping is a generated catalog file (no proxy).
                 if enabled
+                    && is_chat
                     && !data
                         .proxy
                         .routes_current_app_through_proxy(&AppType::Codex)

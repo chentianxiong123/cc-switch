@@ -466,8 +466,8 @@ fn codex_local_routing_field_help(field: CodexLocalRoutingField) -> HelpContent 
         CodexLocalRoutingField::ModelCatalog => HelpContent::new(
             texts::tui_codex_model_catalog(),
             help_lines(
-                "打开模型映射列表。这里把供应商模型 ID 映射成 Codex 可见模型，并可设置显示名和上下文窗口。\n修改后通常需要重启 Codex，/model 列表才会刷新。",
-                "Opens the model mapping list. It maps provider model IDs into models visible to Codex, with optional display name and context window.\nRestart Codex after changes so the /model list refreshes.",
+                "在此把供应商模型映射成 Codex 可见模型。a 添加行，Enter 编辑单元格，←→ 切换列，f 拉取，Del 删除。\n三列：\n· 实际请求模型 —— 发给上游的模型 ID，不能为空（例：deepseek-chat）\n· 显示名 —— /model 菜单里显示的名字，留空用模型 ID（例：DeepSeek Chat）\n· 上下文窗口 —— 该模型的上下文长度，留空不覆盖（例：128000）\n修改后通常需要重启 Codex，/model 列表才会刷新。",
+                "Map provider models into models visible to Codex here. Press a to add a row, Enter to edit a cell, ←→ to switch columns, f to fetch, Del to delete.\nThree columns:\n· Request model — the model ID sent upstream, cannot be empty (e.g. deepseek-chat)\n· Display name — the name shown in the /model menu, empty uses the model ID (e.g. DeepSeek Chat)\n· Context window — this model's context length, empty to not override (e.g. 128000)\nRestart Codex after changes so the /model list refreshes.",
             ),
         ),
     }

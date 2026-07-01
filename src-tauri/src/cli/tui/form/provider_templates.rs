@@ -437,6 +437,7 @@ impl ProviderAddFormState {
                     self.codex_api_key = defaults.codex_api_key;
                     self.codex_chat_reasoning = defaults.codex_chat_reasoning;
                     self.codex_model_catalog = defaults.codex_model_catalog;
+                    self.codex_local_routing_enabled = defaults.codex_local_routing_enabled;
                     self.codex_local_routing_field_idx = defaults.codex_local_routing_field_idx;
                     self.codex_model_catalog_idx = defaults.codex_model_catalog_idx;
                     self.codex_model_catalog_field = defaults.codex_model_catalog_field;
@@ -615,6 +616,12 @@ impl ProviderAddFormState {
             };
         }
 
+        // A preset with a model catalog implies routing/mapping is on (no
+        // dedicated stored field), matching the load-time initialization.
+        if matches!(self.app_type, AppType::Codex) {
+            self.codex_local_routing_enabled = !self.codex_model_catalog.is_empty();
+        }
+
         if !self.id_is_manual && !self.name.is_blank() {
             let id = crate::cli::commands::provider_input::generate_provider_id_for_app(
                 &self.app_type,
@@ -775,12 +782,17 @@ impl ProviderAddFormState {
                 }
             }
         }
+
+        if matches!(self.app_type, AppType::Codex) {
+            self.codex_local_routing_enabled = !self.codex_model_catalog.is_empty();
+        }
     }
 
     fn reset_codex_local_routing_state(&mut self) {
         self.claude_api_format = ClaudeApiFormat::OpenAiResponses;
         self.codex_chat_reasoning = CodexChatReasoningConfig::default();
         self.codex_model_catalog.clear();
+        self.codex_local_routing_enabled = false;
         self.codex_local_routing_field_idx = 0;
         self.codex_model_catalog_idx = 0;
         self.codex_model_catalog_field = CodexModelCatalogField::Model;

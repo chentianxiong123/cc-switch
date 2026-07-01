@@ -135,11 +135,16 @@ impl ProviderAddFormState {
                     let provider_key =
                         clean_codex_provider_key(self.id.value.trim(), self.name.value.trim());
                     let base_url = self.codex_base_url.value.trim().trim_end_matches('/');
-                    // Model mapping (catalog) is decoupled from the upstream
-                    // format: both Chat (proxy routing) and native Responses
-                    // (direct-connect catalog) persist it. Its first entry
-                    // becomes the active config model when present.
-                    let model_catalog = self.normalized_codex_model_catalog_for_save();
+                    // Model mapping (catalog) is gated by the independent
+                    // "需要本地路由映射" toggle (decoupled from the upstream
+                    // format). When on it persists for both Chat (proxy routing)
+                    // and native Responses (direct-connect catalog); its first
+                    // entry becomes the active config model.
+                    let model_catalog = if self.codex_local_routing_enabled() {
+                        self.normalized_codex_model_catalog_for_save()
+                    } else {
+                        Vec::new()
+                    };
                     let model = if !model_catalog.is_empty() {
                         model_catalog[0]["model"].as_str().unwrap_or("gpt-5.4")
                     } else if self.codex_model.is_blank() {
@@ -597,7 +602,9 @@ impl ProviderAddFormState {
                     _ => "openai_responses",
                 };
                 meta_obj.insert("apiFormat".to_string(), json!(api_format));
-                if self.codex_local_routing_enabled() {
+                // Reasoning capability is persisted only when routing is enabled
+                // AND the upstream format is Chat (reasoning is Chat-only).
+                if self.codex_local_routing_enabled() && self.codex_is_chat_format() {
                     if let Some(reasoning) =
                         normalize_codex_chat_reasoning_for_save(&self.codex_chat_reasoning)
                     {

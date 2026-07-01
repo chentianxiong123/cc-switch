@@ -1706,9 +1706,25 @@ pub mod texts {
 
     pub fn tui_codex_local_routing_enable() -> &'static str {
         if is_chinese() {
-            "启用本地路由"
+            "需要本地路由映射"
         } else {
-            "Enable Local Routing"
+            "Needs local routing mapping"
+        }
+    }
+
+    pub fn tui_toggle_on() -> &'static str {
+        if is_chinese() {
+            "打开"
+        } else {
+            "On"
+        }
+    }
+
+    pub fn tui_toggle_off() -> &'static str {
+        if is_chinese() {
+            "关闭"
+        } else {
+            "Off"
         }
     }
 

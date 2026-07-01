@@ -12494,7 +12494,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_codex_local_routing_model_catalog_opens_list_page_and_adds_models() {
+    fn provider_codex_local_routing_model_catalog_edits_inline_and_adds_models() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
         app.focus = Focus::Content;
@@ -12520,18 +12520,13 @@ mod tests {
         }
 
         app.on_key(key(KeyCode::Enter), &data); // open model-mapping page
-                                                // Default upstream format is Responses, so the sub-page shows only the
-                                                // model-catalog entry (no reasoning toggles); it is the first field.
-        let action = app.on_key(key(KeyCode::Enter), &data); // open the catalog list
-        assert!(matches!(action, Action::None));
+        app.on_key(key(KeyCode::Enter), &data); // toggle "需要本地路由映射" on
+                                                // Default upstream format is Responses, so once routing is on the inline
+                                                // model-catalog table sits below the toggle; Down focuses it.
+        app.on_key(key(KeyCode::Down), &data); // focus the inline catalog table
         assert!(app.editor.is_none());
-        assert!(matches!(
-            app.form,
-            Some(super::super::form::FormState::ProviderAdd(ref form))
-                if matches!(form.page, super::super::form::ProviderFormPage::CodexModelCatalog)
-        ));
 
-        app.on_key(key(KeyCode::Char('+')), &data);
+        app.on_key(key(KeyCode::Char('+')), &data); // add a model row inline
         assert!(matches!(
             app.overlay,
             Overlay::TextInput(TextInputState {
@@ -13663,12 +13658,14 @@ mod tests {
         app.on_key(key(KeyCode::Char('?')), &UiData::default());
         if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {
             form.open_codex_local_routing_page();
+            // Reasoning capability only shows when routing is on AND format is Chat.
+            form.claude_api_format = super::super::form::ClaudeApiFormat::OpenAiChat;
             form.toggle_codex_local_routing_enabled();
             form.codex_local_routing_field_idx = form
                 .codex_local_routing_fields()
                 .iter()
                 .position(|field| *field == CodexLocalRoutingField::SupportsEffort)
-                .expect("SupportsEffort field should be visible when local routing is enabled");
+                .expect("SupportsEffort field should be visible when routing is on and Chat");
         }
 
         app.on_key(key(KeyCode::Char('?')), &UiData::default());

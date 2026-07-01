@@ -81,22 +81,27 @@ pub(crate) fn codex_local_routing_form_key_items(
 ) -> Vec<(&'static str, &'static str)> {
     // Ctrl+S only saves from the outermost form page, so it is not advertised
     // on this sub-page; Esc returns to the main page.
-    let mut keys = vec![
+    if matches!(
+        selected_field,
+        Some(super::form::CodexLocalRoutingField::ModelCatalog)
+    ) {
+        // Focus is on the inline model-catalog table.
+        return vec![
+            ("Esc", texts::tui_key_no()),
+            ("↑↓", texts::tui_key_select()),
+            ("←→", texts::tui_key_select()),
+            ("Enter", texts::tui_key_edit()),
+            ("a", texts::tui_key_add()),
+            ("f", texts::tui_key_fetch_model()),
+            ("Del", texts::tui_key_delete()),
+        ];
+    }
+
+    vec![
         ("Esc", texts::tui_key_no()),
         ("↑↓", texts::tui_key_select()),
-    ];
-
-    let enter_action = match selected_field {
-        Some(super::form::CodexLocalRoutingField::ModelCatalog) => texts::tui_key_open(),
-        Some(
-            super::form::CodexLocalRoutingField::Enabled
-            | super::form::CodexLocalRoutingField::SupportsThinking
-            | super::form::CodexLocalRoutingField::SupportsEffort,
-        ) => texts::tui_key_toggle(),
-        None => texts::tui_key_toggle(),
-    };
-    keys.push(("Enter", enter_action));
-    keys
+        ("Enter", texts::tui_key_toggle()),
+    ]
 }
 
 pub(crate) fn codex_model_catalog_form_key_items(

@@ -220,6 +220,9 @@ fn populate_codex_form(form: &mut ProviderAddFormState, provider: &Provider) {
                 .collect()
         })
         .unwrap_or_default();
+    // The routing/mapping toggle has no dedicated stored field: a provider that
+    // already carries a catalog is treated as having local routing enabled.
+    form.codex_local_routing_enabled = !form.codex_model_catalog.is_empty();
 }
 
 fn populate_gemini_form(form: &mut ProviderAddFormState, provider: &Provider) {

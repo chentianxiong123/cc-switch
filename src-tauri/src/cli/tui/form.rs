@@ -192,6 +192,10 @@ pub enum ProviderAddField {
     CodexOAuthAccount,
     CodexFastMode,
     CodexBaseUrl,
+    // Retired from the form (matches upstream): the model is configured via the
+    // catalog / config, not a standalone row. Match arms + `codex_model` state
+    // (loaded from config, used as the serialization fallback) are kept.
+    #[allow(dead_code)]
     CodexModel,
     CodexAdvancedDivider,
     CodexLocalRouting,
@@ -270,9 +274,7 @@ pub enum UsageQueryField {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexLocalRoutingField {
-    // Retired: the routing on/off toggle was replaced by the upstream-format
-    // picker. Kept so existing match arms stay valid; never constructed.
-    #[allow(dead_code)]
+    /// The "需要本地路由映射" toggle — an independent per-provider gate.
     Enabled,
     SupportsThinking,
     SupportsEffort,
@@ -307,24 +309,6 @@ pub struct CodexModelCatalogRow {
     pub model: String,
     pub display_name: String,
     pub context_window: String,
-}
-
-impl CodexModelCatalogRow {
-    pub(crate) fn summary_label(&self) -> String {
-        let model = self.model.trim();
-        let display_name = self.display_name.trim();
-        let mut label = if display_name.is_empty() || display_name == model {
-            model.to_string()
-        } else {
-            format!("{display_name} ({model})")
-        };
-
-        let context_window = codex_model_catalog_context_window_label(&self.context_window);
-        if !context_window.is_empty() {
-            label.push_str(&format!(" [{context_window}]"));
-        }
-        label
-    }
 }
 
 pub(crate) fn parse_codex_model_catalog_context_window(raw: &str) -> Option<u64> {
@@ -466,6 +450,11 @@ pub struct ProviderAddFormState {
     pub codex_api_key: TextInput,
     pub codex_chat_reasoning: CodexChatReasoningConfig,
     pub codex_model_catalog: Vec<CodexModelCatalogRow>,
+    /// Independent "需要本地路由映射" toggle (decoupled from the upstream
+    /// format, mirroring upstream a4eb5f37). Gates model-mapping / reasoning
+    /// display and persistence; no dedicated stored field — initialized from
+    /// whether the provider already carries a catalog.
+    pub codex_local_routing_enabled: bool,
 
     pub gemini_auth_type: GeminiAuthType,
     pub gemini_api_key: TextInput,

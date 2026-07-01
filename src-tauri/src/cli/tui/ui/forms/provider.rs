@@ -482,13 +482,22 @@ fn render_codex_local_routing_form(
         )
         .copied();
 
+    // Only the toggle + reasoning fields render as the top field table; the
+    // model catalog is shown inline as a full-width editable table below.
+    let top_fields: Vec<_> = fields
+        .iter()
+        .copied()
+        .filter(|field| !matches!(field, super::form::CodexLocalRoutingField::ModelCatalog))
+        .collect();
+    let on_table = matches!(
+        selected_field,
+        Some(super::form::CodexLocalRoutingField::ModelCatalog)
+    );
+    let show_table = provider.codex_local_routing_enabled();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(inner);
 
     render_key_bar(
@@ -498,23 +507,30 @@ fn render_codex_local_routing_form(
         &codex_local_routing_form_key_items(selected_field),
     );
 
-    let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-        .split(chunks[1]);
+    let body = if show_table {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(top_fields.len() as u16 + 3),
+                Constraint::Min(0),
+            ])
+            .split(chunks[1])
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0)])
+            .split(chunks[1])
+    };
 
     let fields_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(focus_block_style(
-            matches!(provider.focus, FormFocus::Fields),
-            theme,
-        ))
+        .border_style(focus_block_style(!on_table, theme))
         .title(texts::tui_form_fields_title());
     frame.render_widget(fields_block.clone(), body[0]);
     let fields_inner = fields_block.inner(body[0]);
 
-    let rows_data = fields
+    let rows_data = top_fields
         .iter()
         .map(|field| codex_local_routing_field_label_and_value(provider, *field))
         .collect::<Vec<_>>();
@@ -547,28 +563,33 @@ fn render_codex_local_routing_form(
     .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
-    if !fields.is_empty() {
+    if !on_table && !top_fields.is_empty() {
         state.select(Some(
-            provider.codex_local_routing_field_idx.min(fields.len() - 1),
+            provider
+                .codex_local_routing_field_idx
+                .min(top_fields.len() - 1),
         ));
     }
     frame.render_stateful_widget(table, fields_inner, &mut state);
 
-    render_codex_model_catalog_preview(frame, provider, body[1], theme);
-    render_codex_local_routing_input(frame, provider, selected_field, chunks[2], theme);
+    if show_table {
+        render_codex_model_catalog_inline(frame, provider, body[1], theme, on_table);
+    }
 }
 
-fn render_codex_model_catalog_preview(
+/// Full-width inline model-catalog table shown inside the model-mapping page.
+/// `active` highlights the current cell when the table zone is focused.
+fn render_codex_model_catalog_inline(
     frame: &mut Frame<'_>,
     provider: &super::form::ProviderAddFormState,
     area: Rect,
     theme: &super::theme::Theme,
+    active: bool,
 ) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(theme.dim))
-        .title(texts::tui_codex_model_catalog_preview_title());
+        .border_style(focus_block_style(active, theme));
     frame.render_widget(block.clone(), area);
     let inner = block.inner(area);
 
@@ -582,21 +603,54 @@ fn render_codex_model_catalog_preview(
         return;
     }
 
+    let header = Row::new(vec![
+        Cell::from(cell_pad(texts::tui_codex_model_catalog_model_header())),
+        Cell::from(cell_pad(texts::tui_codex_model_catalog_display_header())),
+        Cell::from(cell_pad(texts::tui_codex_model_catalog_context_header())),
+    ])
+    .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
+
+    let selected_idx = provider
+        .codex_model_catalog_idx
+        .min(provider.codex_model_catalog.len().saturating_sub(1));
+    let selected_field = provider.codex_model_catalog_field;
     let rows = provider
         .codex_model_catalog
         .iter()
         .enumerate()
         .map(|(idx, row)| {
-            Row::new(vec![Cell::from(cell_pad(&format!(
-                "{}. {}",
-                idx + 1,
-                row.summary_label()
-            )))])
-        })
-        .collect::<Vec<_>>();
+            let context_window =
+                super::form::codex_model_catalog_context_window_label(&row.context_window);
+            let cell = |value: &str, field: super::form::CodexModelCatalogField| {
+                if active {
+                    codex_model_catalog_cell(value, idx, selected_idx, field, selected_field, theme)
+                } else {
+                    Cell::from(cell_pad(value))
+                }
+            };
+            Row::new(vec![
+                cell(&row.model, super::form::CodexModelCatalogField::Model),
+                cell(
+                    &row.display_name,
+                    super::form::CodexModelCatalogField::DisplayName,
+                ),
+                cell(
+                    &context_window,
+                    super::form::CodexModelCatalogField::ContextWindow,
+                ),
+            ])
+        });
 
-    let table =
-        Table::new(rows, [Constraint::Min(10)]).block(Block::default().borders(Borders::NONE));
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(45),
+            Constraint::Percentage(35),
+            Constraint::Percentage(20),
+        ],
+    )
+    .header(header)
+    .block(Block::default().borders(Borders::NONE));
     frame.render_widget(table, inner);
 }
 
@@ -741,25 +795,6 @@ fn codex_model_catalog_cell_style(
     } else {
         Style::default()
     }
-}
-
-fn render_codex_local_routing_input(
-    frame: &mut Frame<'_>,
-    provider: &super::form::ProviderAddFormState,
-    selected: Option<super::form::CodexLocalRoutingField>,
-    area: Rect,
-    theme: &super::theme::Theme,
-) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(theme.dim))
-        .title(texts::tui_form_input_title());
-    frame.render_widget(block.clone(), area);
-    let inner = block.inner(area);
-
-    let (line, _cursor_col) = codex_local_routing_field_editor_line(provider, selected);
-    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), inner);
 }
 
 fn render_usage_query_form(
@@ -1263,7 +1298,7 @@ pub(crate) fn provider_field_label_and_value(
                 "[ ]".to_string()
             }
         }
-        ProviderAddField::CodexLocalRouting => provider.codex_model_catalog_summary(),
+        ProviderAddField::CodexLocalRouting => String::new(),
         ProviderAddField::IncludeCommonConfig => {
             if provider.include_common_config {
                 format!("[{}]", texts::tui_marker_active())
@@ -1422,9 +1457,9 @@ pub(crate) fn codex_local_routing_field_label_and_value(
     let value = match field {
         super::form::CodexLocalRoutingField::Enabled => {
             if provider.codex_local_routing_enabled() {
-                format!("[{}]", texts::tui_marker_active())
+                texts::tui_toggle_on().to_string()
             } else {
-                "[ ]".to_string()
+                texts::tui_toggle_off().to_string()
             }
         }
         super::form::CodexLocalRoutingField::SupportsThinking => {
@@ -1445,34 +1480,6 @@ pub(crate) fn codex_local_routing_field_label_and_value(
     };
 
     (label, value)
-}
-
-pub(crate) fn codex_local_routing_field_editor_line(
-    provider: &super::form::ProviderAddFormState,
-    selected: Option<super::form::CodexLocalRoutingField>,
-) -> (Line<'static>, usize) {
-    let text = match selected {
-        Some(super::form::CodexLocalRoutingField::Enabled) => {
-            format!("local_routing = {}", provider.codex_local_routing_enabled())
-        }
-        Some(super::form::CodexLocalRoutingField::SupportsThinking) => {
-            format!(
-                "supportsThinking = {}",
-                provider.codex_reasoning_supports_thinking()
-            )
-        }
-        Some(super::form::CodexLocalRoutingField::SupportsEffort) => {
-            format!(
-                "supportsEffort = {}",
-                provider.codex_reasoning_supports_effort()
-            )
-        }
-        Some(super::form::CodexLocalRoutingField::ModelCatalog) => {
-            texts::tui_codex_model_catalog().to_string()
-        }
-        None => String::new(),
-    };
-    (Line::raw(text), 0)
 }
 
 fn provider_field_is_divider(field: ProviderAddField) -> bool {
