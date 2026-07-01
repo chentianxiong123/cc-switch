@@ -980,6 +980,27 @@ fn provider_add_form_codex_collapses_quick_toggles_into_menu() {
 
     let fields = form.fields();
     assert!(fields.contains(&ProviderAddField::CodexQuickConfig));
+
+    // The quick-config menu must sit directly below the add-common-config
+    // toggle, matching the Claude form layout.
+    let pos = |field: ProviderAddField| {
+        fields
+            .iter()
+            .position(|candidate| *candidate == field)
+            .unwrap_or_else(|| panic!("{field:?} field should exist"))
+    };
+    let include_common_idx = pos(ProviderAddField::IncludeCommonConfig);
+    let quick_config_idx = pos(ProviderAddField::CodexQuickConfig);
+    let usage_divider_idx = pos(ProviderAddField::UsageQueryDivider);
+    assert!(
+        quick_config_idx == include_common_idx + 1,
+        "the quick-config menu should sit directly below the add-common-config toggle"
+    );
+    assert!(
+        quick_config_idx < usage_divider_idx,
+        "the quick-config menu stays above the usage-query section"
+    );
+
     // The two toggles live on the sub-page, not the main field list.
     assert!(!fields.contains(&ProviderAddField::CodexGoalMode));
     assert!(!fields.contains(&ProviderAddField::CodexRemoteCompaction));
@@ -1055,6 +1076,20 @@ fn provider_add_form_codex_official_offers_goal_mode_only() {
     // config rows are not.
     assert!(fields.contains(&ProviderAddField::CodexQuickConfig));
     assert!(!fields.contains(&ProviderAddField::CodexLocalRouting));
+    // Even for official providers the menu stays directly below the
+    // add-common-config toggle.
+    let include_common_idx = fields
+        .iter()
+        .position(|field| *field == ProviderAddField::IncludeCommonConfig)
+        .expect("common config toggle should exist");
+    let quick_config_idx = fields
+        .iter()
+        .position(|field| *field == ProviderAddField::CodexQuickConfig)
+        .expect("quick-config menu should exist");
+    assert!(
+        quick_config_idx == include_common_idx + 1,
+        "the quick-config menu should sit directly below the add-common-config toggle"
+    );
     // Upstream shows remote compaction only for non-official providers.
     assert_eq!(
         form.codex_quick_config_fields(),

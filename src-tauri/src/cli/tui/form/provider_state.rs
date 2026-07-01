@@ -396,10 +396,6 @@ impl ProviderAddFormState {
                     fields.push(ProviderAddField::ClaudeApiFormat);
                     fields.push(ProviderAddField::CodexLocalRouting);
                 }
-                // Goal mode applies to every Codex provider, so the quick-config
-                // menu is available for official providers too (only its remote
-                // compaction toggle is custom-only).
-                fields.push(ProviderAddField::CodexQuickConfig);
             }
             AppType::Gemini => {
                 fields.push(ProviderAddField::GeminiAuthType);
@@ -440,10 +436,14 @@ impl ProviderAddFormState {
             fields.push(ProviderAddField::CommonSnippet);
             fields.push(ProviderAddField::IncludeCommonConfig);
         }
-        // The Claude quick toggles are collapsed into a single sub-page entry
-        // ("快捷配置菜单") that sits directly below the common-config controls.
-        if matches!(self.app_type, AppType::Claude) {
-            fields.push(ProviderAddField::ClaudeQuickConfig);
+        // The Claude/Codex quick toggles are collapsed into a single sub-page
+        // entry ("快捷配置菜单") that sits directly below the common-config
+        // controls. Goal mode applies to every Codex provider, so the Codex
+        // entry is present for official providers too.
+        match self.app_type {
+            AppType::Claude => fields.push(ProviderAddField::ClaudeQuickConfig),
+            AppType::Codex => fields.push(ProviderAddField::CodexQuickConfig),
+            _ => {}
         }
         fields.push(ProviderAddField::UsageQueryDivider);
         fields.push(ProviderAddField::UsageQuery);
