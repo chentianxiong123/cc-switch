@@ -467,10 +467,12 @@ impl ProviderService {
                 AppError::Config("Codex 供应商配置缺少 'config' 字段或不是字符串".to_string())
             })?;
 
+        let profile = crate::proxy::providers::codex_provider_catalog_tool_profile(provider);
         let prepared_config =
             crate::codex_config::prepare_codex_config_text_with_model_catalog_payload(
                 &provider.settings_config,
                 cfg_text,
+                profile,
             )?;
         let category = Self::codex_live_write_category(provider);
         // Mirror upstream write_codex_live_for_provider: official providers with

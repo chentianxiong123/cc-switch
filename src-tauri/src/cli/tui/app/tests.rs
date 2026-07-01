@@ -12413,7 +12413,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_codex_local_routing_toggle_warns_when_proxy_not_enabled() {
+    fn provider_codex_upstream_format_chat_warns_when_proxy_not_enabled() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
         app.focus = Focus::Content;
@@ -12429,14 +12429,15 @@ mod tests {
             form.field_idx = form
                 .fields()
                 .iter()
-                .position(|field| *field == ProviderAddField::CodexLocalRouting)
-                .expect("Codex local routing field should exist");
+                .position(|field| *field == ProviderAddField::ClaudeApiFormat)
+                .expect("Codex upstream-format field should exist");
         } else {
             panic!("expected ProviderAdd form");
         }
 
-        app.on_key(key(KeyCode::Enter), &data);
-        let action = app.on_key(key(KeyCode::Enter), &data);
+        app.on_key(key(KeyCode::Enter), &data); // open upstream-format picker
+        app.on_key(key(KeyCode::Down), &data); // move to Chat Completions
+        let action = app.on_key(key(KeyCode::Enter), &data); // select Chat
 
         assert!(matches!(action, Action::None));
         assert!(matches!(
@@ -12454,7 +12455,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_codex_local_routing_toggle_does_not_warn_when_proxy_routes_current_app() {
+    fn provider_codex_upstream_format_chat_does_not_warn_when_proxy_routes_current_app() {
         let mut app = App::new(Some(AppType::Codex));
         app.route = Route::Providers;
         app.focus = Focus::Content;
@@ -12473,14 +12474,15 @@ mod tests {
             form.field_idx = form
                 .fields()
                 .iter()
-                .position(|field| *field == ProviderAddField::CodexLocalRouting)
-                .expect("Codex local routing field should exist");
+                .position(|field| *field == ProviderAddField::ClaudeApiFormat)
+                .expect("Codex upstream-format field should exist");
         } else {
             panic!("expected ProviderAdd form");
         }
 
-        app.on_key(key(KeyCode::Enter), &data);
-        let action = app.on_key(key(KeyCode::Enter), &data);
+        app.on_key(key(KeyCode::Enter), &data); // open upstream-format picker
+        app.on_key(key(KeyCode::Down), &data); // move to Chat Completions
+        let action = app.on_key(key(KeyCode::Enter), &data); // select Chat
 
         assert!(matches!(action, Action::None));
         assert!(matches!(app.overlay, Overlay::None));
@@ -12517,13 +12519,10 @@ mod tests {
             panic!("expected ProviderAdd form");
         }
 
-        app.on_key(key(KeyCode::Enter), &data); // open local routing page
-        app.on_key(key(KeyCode::Enter), &data); // enable local routing
-        app.on_key(key(KeyCode::Down), &data);
-        app.on_key(key(KeyCode::Down), &data);
-        app.on_key(key(KeyCode::Down), &data);
-
-        let action = app.on_key(key(KeyCode::Enter), &data);
+        app.on_key(key(KeyCode::Enter), &data); // open model-mapping page
+                                                // Default upstream format is Responses, so the sub-page shows only the
+                                                // model-catalog entry (no reasoning toggles); it is the first field.
+        let action = app.on_key(key(KeyCode::Enter), &data); // open the catalog list
         assert!(matches!(action, Action::None));
         assert!(app.editor.is_none());
         assert!(matches!(
@@ -13630,6 +13629,22 @@ mod tests {
     }
 
     #[test]
+    fn context_help_codex_upstream_format_shows_format_hint() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Codex));
+        app.form = Some(FormState::ProviderAdd(ProviderAddFormState::new(
+            AppType::Codex,
+        )));
+        select_provider_field(&mut app, ProviderAddField::ClaudeApiFormat);
+
+        app.on_key(key(KeyCode::Char('?')), &UiData::default());
+        let text = help_text(&app);
+        assert!(text.contains("Upstream format"), "{text}");
+        assert!(text.contains("natively Responses API"), "{text}");
+        assert!(!text.contains("上游格式"), "{text}");
+    }
+
+    #[test]
     fn context_help_codex_local_routing_fields_follow_focus() {
         let _lang = use_test_language(Language::English);
         let mut app = App::new(Some(AppType::Codex));
@@ -13640,12 +13655,10 @@ mod tests {
 
         app.on_key(key(KeyCode::Char('?')), &UiData::default());
         let main_field = help_text(&app);
-        assert!(main_field.contains("Local Routing"), "{main_field}");
-        assert!(
-            main_field.contains("OpenAI Chat Completions"),
-            "{main_field}"
-        );
-        assert!(!main_field.contains("本地路由"), "{main_field}");
+        assert!(main_field.contains("Model mapping"), "{main_field}");
+        assert!(main_field.contains("Chat Completions"), "{main_field}");
+        assert!(main_field.contains("model-catalogs.json"), "{main_field}");
+        assert!(!main_field.contains("模型映射"), "{main_field}");
 
         app.on_key(key(KeyCode::Char('?')), &UiData::default());
         if let Some(FormState::ProviderAdd(form)) = app.form.as_mut() {

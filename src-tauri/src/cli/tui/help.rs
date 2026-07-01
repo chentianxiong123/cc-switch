@@ -272,10 +272,10 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
             ),
         ),
         ProviderAddField::CodexLocalRouting => HelpContent::new(
-            texts::tui_label_codex_local_routing(),
+            texts::tui_label_codex_model_mapping(),
             help_lines(
-                "打开 Codex 本地路由二级页面。供应商使用 OpenAI Chat Completions 或非 GPT 模型时，开启后 cc-switch 会通过本地代理做协议转换、模型路由和模型目录映射。\n开启后使用此供应商时需要保持本地代理运行。",
-                "Opens the Codex Local Routing secondary page. When the provider uses OpenAI Chat Completions or non-GPT models, enabling it lets cc-switch use the local proxy for protocol conversion, model routing, and model catalog mapping.\nKeep the local proxy running while using this provider.",
+                "打开模型映射二级页面。填了才生成模型目录：Chat Completions 会生成兼容路由（走本地代理转换），原生 Responses 会生成 model-catalogs.json 供 Codex 直连显示。留空则不生成。\n使用 Chat 格式时，这里还会显示「思考能力」开关。",
+                "Opens the model mapping page. A catalog is generated only when filled: Chat Completions produces compatibility routing (via the local proxy), while native Responses generates model-catalogs.json for Codex direct-connect. Left empty, nothing is generated.\nWith the Chat format, reasoning-capability toggles also appear here.",
             ),
         ),
         ProviderAddField::ClaudeModelConfig => HelpContent::new(
@@ -285,6 +285,15 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
                 "Configures Claude model tiers. Role-specific models are written into the live config for the client to select by task.",
             ),
         ),
+        ProviderAddField::ClaudeApiFormat if matches!(app_type, AppType::Codex) => {
+            HelpContent::new(
+                texts::tui_label_codex_upstream_format(),
+                help_lines(
+                    "选择上游供应商的 API 格式。供应商原生是 Responses API 就选 Responses（直连，不转换）；使用 Chat Completions 协议就选 Chat（需通过本地路由转换为 Chat Completions）。",
+                    "Select the upstream provider's API format. Choose Responses when the provider is natively Responses API (direct, no conversion); choose Chat when it uses Chat Completions (converted via local routing).",
+                ),
+            )
+        }
         ProviderAddField::ClaudeApiFormat => HelpContent::new(
             texts::tui_label_claude_api_format(),
             help_lines(
@@ -424,6 +433,7 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
         | ProviderAddField::CodexRequiresOpenaiAuth
         | ProviderAddField::CodexEnvKey
         | ProviderAddField::ClaudeAdvancedDivider
+        | ProviderAddField::CodexAdvancedDivider
         | ProviderAddField::HermesAdvancedDivider
         | ProviderAddField::CommonConfigDivider
         | ProviderAddField::UsageQueryDivider => HelpContent::empty(),
@@ -621,6 +631,7 @@ fn provider_field_is_divider(field: ProviderAddField) -> bool {
     matches!(
         field,
         ProviderAddField::ClaudeAdvancedDivider
+            | ProviderAddField::CodexAdvancedDivider
             | ProviderAddField::HermesAdvancedDivider
             | ProviderAddField::CommonConfigDivider
             | ProviderAddField::UsageQueryDivider

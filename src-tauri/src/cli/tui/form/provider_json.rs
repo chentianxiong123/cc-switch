@@ -135,8 +135,12 @@ impl ProviderAddFormState {
                     let provider_key =
                         clean_codex_provider_key(self.id.value.trim(), self.name.value.trim());
                     let base_url = self.codex_base_url.value.trim().trim_end_matches('/');
+                    // Model mapping (catalog) is decoupled from the upstream
+                    // format: both Chat (proxy routing) and native Responses
+                    // (direct-connect catalog) persist it. Its first entry
+                    // becomes the active config model when present.
                     let model_catalog = self.normalized_codex_model_catalog_for_save();
-                    let model = if self.codex_local_routing_enabled() && !model_catalog.is_empty() {
+                    let model = if !model_catalog.is_empty() {
                         model_catalog[0]["model"].as_str().unwrap_or("gpt-5.4")
                     } else if self.codex_model.is_blank() {
                         "gpt-5.4"
@@ -167,7 +171,7 @@ impl ProviderAddFormState {
                         self.codex_env_key.value.trim(),
                     );
                     settings_obj.insert("config".to_string(), Value::String(config_toml));
-                    if self.codex_local_routing_enabled() && !model_catalog.is_empty() {
+                    if !model_catalog.is_empty() {
                         settings_obj.insert(
                             "modelCatalog".to_string(),
                             json!({ "models": model_catalog }),

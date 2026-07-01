@@ -512,9 +512,7 @@ impl App {
                 let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
                     return Action::None;
                 };
-                if !provider.codex_local_routing_enabled() {
-                    return Action::None;
-                }
+                // Model mapping is available for both Chat and native Responses.
                 provider.open_codex_model_catalog_page();
                 Action::None
             }
@@ -1281,7 +1279,9 @@ fn is_provider_divider_field(field: Option<&ProviderAddField>) -> bool {
     matches!(
         field,
         Some(
-            ProviderAddField::HermesAdvancedDivider
+            ProviderAddField::ClaudeAdvancedDivider
+                | ProviderAddField::CodexAdvancedDivider
+                | ProviderAddField::HermesAdvancedDivider
                 | ProviderAddField::CommonConfigDivider
                 | ProviderAddField::UsageQueryDivider
         )

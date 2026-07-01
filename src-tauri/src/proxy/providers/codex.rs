@@ -12,6 +12,23 @@ use super::{AuthInfo, AuthStrategy, ProviderAdapter};
 
 pub struct CodexAdapter;
 
+/// Which generated-catalog tool profile a Codex provider should use.
+///
+/// Derived from the same chat/responses detection as request routing (which
+/// honors `meta.apiFormat`, the `settingsConfig.api_format`/`apiFormat`
+/// fallbacks, config.toml `wire_api`, and the base-url shape) rather than only
+/// `meta.apiFormat`, so imported/legacy native-Responses providers still get
+/// the native (apply_patch-stripped) catalog.
+pub fn codex_provider_catalog_tool_profile(
+    provider: &Provider,
+) -> crate::codex_config::CodexCatalogToolProfile {
+    if codex_provider_uses_chat_completions(provider) {
+        crate::codex_config::CodexCatalogToolProfile::ProxyChat
+    } else {
+        crate::codex_config::CodexCatalogToolProfile::NativeResponses
+    }
+}
+
 /// Whether this Codex provider's real upstream should be called through
 /// OpenAI Chat Completions, even if the local Codex client is talking to CC
 /// Switch through the Responses API.
@@ -576,6 +593,25 @@ experimental_bearer_token = "sk-config-key"
         }));
 
         assert!(adapter.extract_auth(&provider).is_none());
+    }
+
+    #[test]
+    fn test_catalog_tool_profile_honors_settings_api_format_fallback() {
+        use crate::codex_config::CodexCatalogToolProfile;
+        // Legacy/imported provider carries apiFormat only in settingsConfig (no
+        // meta): the catalog profile must still pick NativeResponses so native
+        // gateways don't get the freeform apply_patch tool.
+        let responses = create_provider(json!({ "api_format": "openai_responses" }));
+        assert_eq!(
+            codex_provider_catalog_tool_profile(&responses),
+            CodexCatalogToolProfile::NativeResponses
+        );
+
+        let chat = create_provider(json!({ "api_format": "openai_chat" }));
+        assert_eq!(
+            codex_provider_catalog_tool_profile(&chat),
+            CodexCatalogToolProfile::ProxyChat
+        );
     }
 
     #[test]

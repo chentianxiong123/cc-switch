@@ -1124,9 +1124,10 @@ fn provider_add_form_codex_template_switch_clears_local_routing_state() {
 
     assert!(!form.codex_local_routing_enabled());
     assert_eq!(form.codex_local_routing_field_idx, 0);
+    // Responses format: no reasoning toggles, but model mapping stays available.
     assert_eq!(
         form.codex_local_routing_fields(),
-        vec![CodexLocalRoutingField::Enabled]
+        vec![CodexLocalRoutingField::ModelCatalog]
     );
     assert_eq!(form.codex_chat_reasoning, Default::default());
     assert!(form.codex_model_catalog.is_empty());
@@ -1583,6 +1584,47 @@ requires_openai_auth = true
 }
 
 #[test]
+fn provider_add_form_codex_model_mapping_available_for_both_formats() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+
+    // Native Responses: model mapping only, no reasoning toggles.
+    form.claude_api_format = ClaudeApiFormat::OpenAiResponses;
+    assert_eq!(
+        form.codex_local_routing_fields(),
+        vec![CodexLocalRoutingField::ModelCatalog]
+    );
+
+    // Chat: reasoning toggles appear alongside model mapping.
+    form.claude_api_format = ClaudeApiFormat::OpenAiChat;
+    assert_eq!(
+        form.codex_local_routing_fields(),
+        vec![
+            CodexLocalRoutingField::SupportsThinking,
+            CodexLocalRoutingField::SupportsEffort,
+            CodexLocalRoutingField::ModelCatalog,
+        ]
+    );
+
+    // A native Responses provider persists its catalog (decoupled from routing).
+    let mut responses_form = ProviderAddFormState::new(AppType::Codex);
+    responses_form.id.set("custom");
+    responses_form.name.set("Custom");
+    responses_form
+        .codex_base_url
+        .set("https://api.example.com/v1");
+    responses_form.claude_api_format = ClaudeApiFormat::OpenAiResponses;
+    responses_form
+        .apply_codex_model_catalog_value(json!([{ "model": "MiniMax-M3" }]))
+        .expect("catalog should apply");
+    let saved = responses_form.to_provider_json_value();
+    assert_eq!(saved["meta"]["apiFormat"], "openai_responses");
+    assert_eq!(
+        saved["settingsConfig"]["modelCatalog"]["models"][0]["model"],
+        "MiniMax-M3"
+    );
+}
+
+#[test]
 fn provider_add_form_codex_custom_includes_api_key_and_hides_advanced_fields() {
     let form = ProviderAddFormState::new(AppType::Codex);
     let fields = form.fields();
@@ -1593,11 +1635,15 @@ fn provider_add_form_codex_custom_includes_api_key_and_hides_advanced_fields() {
     );
     assert!(
         fields.contains(&ProviderAddField::CodexLocalRouting),
-        "custom Codex provider should expose Local Routing on its secondary page"
+        "custom Codex provider should expose the model-mapping secondary page"
     );
     assert!(
-        !fields.contains(&ProviderAddField::ClaudeApiFormat),
-        "custom Codex provider should not expose the old API Format selector"
+        fields.contains(&ProviderAddField::CodexAdvancedDivider),
+        "custom Codex provider should group advanced fields under a divider"
+    );
+    assert!(
+        fields.contains(&ProviderAddField::ClaudeApiFormat),
+        "custom Codex provider now exposes the upstream-format selector"
     );
     assert!(
         !fields.contains(&ProviderAddField::CodexWireApi),
@@ -1733,7 +1779,7 @@ fn provider_add_form_codex_local_routing_saves_normalized_reasoning() {
 }
 
 #[test]
-fn provider_add_form_codex_responses_removes_reasoning_and_model_catalog() {
+fn provider_add_form_codex_responses_removes_reasoning_but_keeps_model_catalog() {
     let mut provider = Provider::with_id(
         "custom".to_string(),
         "Custom".to_string(),
@@ -1767,13 +1813,19 @@ requires_openai_auth = true
     });
 
     let mut form = ProviderAddFormState::from_provider(AppType::Codex, &provider);
-    form.toggle_codex_local_routing_enabled();
+    // Switch the upstream format to native Responses.
+    form.claude_api_format = ClaudeApiFormat::OpenAiResponses;
 
     let saved = form.to_provider_json_value();
 
     assert_eq!(saved["meta"]["apiFormat"], "openai_responses");
+    // Reasoning capability is Chat-only, so it drops on Responses...
     assert!(saved["meta"].get("codexChatReasoning").is_none());
-    assert!(saved["settingsConfig"].get("modelCatalog").is_none());
+    // ...but model mapping is decoupled and persists for native Responses.
+    let models = saved["settingsConfig"]["modelCatalog"]["models"]
+        .as_array()
+        .expect("native Responses should keep its model catalog");
+    assert_eq!(models[0]["model"], "deepseek-chat");
 }
 
 #[test]

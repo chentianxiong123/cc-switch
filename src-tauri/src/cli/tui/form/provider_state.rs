@@ -378,8 +378,12 @@ impl ProviderAddFormState {
                 if !self.is_codex_official_provider() {
                     fields.push(ProviderAddField::CodexBaseUrl);
                     fields.push(ProviderAddField::CodexModel);
-                    fields.push(ProviderAddField::CodexLocalRouting);
                     fields.push(ProviderAddField::CodexApiKey);
+                    fields.push(ProviderAddField::CodexAdvancedDivider);
+                    // Upstream format is an independent picker; local routing /
+                    // model mapping is decoupled from it.
+                    fields.push(ProviderAddField::ClaudeApiFormat);
+                    fields.push(ProviderAddField::CodexLocalRouting);
                 }
             }
             AppType::Gemini => {
@@ -525,6 +529,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeApiFormat
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::ClaudeAdvancedDivider
+            | ProviderAddField::CodexAdvancedDivider
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::GeminiAuthType
             | ProviderAddField::OpenClawApiProtocol
@@ -579,6 +584,7 @@ impl ProviderAddFormState {
             | ProviderAddField::ClaudeApiFormat
             | ProviderAddField::ClaudeModelConfig
             | ProviderAddField::ClaudeAdvancedDivider
+            | ProviderAddField::CodexAdvancedDivider
             | ProviderAddField::ClaudeHideAttribution
             | ProviderAddField::GeminiAuthType
             | ProviderAddField::OpenClawApiProtocol
@@ -652,9 +658,7 @@ impl ProviderAddFormState {
     }
 
     pub fn open_codex_model_catalog_page(&mut self) {
-        if !self.codex_local_routing_enabled() {
-            return;
-        }
+        // Model mapping is available for both Chat and native Responses formats.
         self.page = ProviderFormPage::CodexModelCatalog;
         self.focus = FormFocus::Fields;
         self.editing = false;
@@ -801,14 +805,15 @@ impl ProviderAddFormState {
     }
 
     pub fn codex_local_routing_fields(&self) -> Vec<CodexLocalRoutingField> {
-        let mut fields = vec![CodexLocalRoutingField::Enabled];
+        // The routing on/off is now driven by the upstream-format picker, so the
+        // sub-page no longer carries an `Enabled` toggle. Reasoning capability
+        // only applies to the Chat format; model mapping applies to both.
+        let mut fields = Vec::new();
         if self.codex_local_routing_enabled() {
-            fields.extend([
-                CodexLocalRoutingField::SupportsThinking,
-                CodexLocalRoutingField::SupportsEffort,
-                CodexLocalRoutingField::ModelCatalog,
-            ]);
+            fields.push(CodexLocalRoutingField::SupportsThinking);
+            fields.push(CodexLocalRoutingField::SupportsEffort);
         }
+        fields.push(CodexLocalRoutingField::ModelCatalog);
         fields
     }
 

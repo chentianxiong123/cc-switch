@@ -193,6 +193,7 @@ pub enum ProviderAddField {
     CodexFastMode,
     CodexBaseUrl,
     CodexModel,
+    CodexAdvancedDivider,
     CodexLocalRouting,
     #[allow(dead_code)]
     CodexWireApi,
@@ -269,6 +270,9 @@ pub enum UsageQueryField {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodexLocalRoutingField {
+    // Retired: the routing on/off toggle was replaced by the upstream-format
+    // picker. Kept so existing match arms stay valid; never constructed.
+    #[allow(dead_code)]
     Enabled,
     SupportsThinking,
     SupportsEffort,

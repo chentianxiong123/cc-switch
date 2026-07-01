@@ -3366,11 +3366,13 @@ impl ProxyService {
             }
         }
 
+        let profile = crate::proxy::providers::codex_provider_catalog_tool_profile(provider);
         crate::codex_config::write_codex_provider_live_with_catalog(
             &settings,
             crate::services::provider::ProviderService::codex_live_write_category(provider),
             auth,
             config_text,
+            profile,
         )
         .map_err(|error| format!("write Codex live config failed: {error}"))
     }
@@ -3402,10 +3404,12 @@ impl ProxyService {
             }
         }
 
+        let profile = crate::proxy::providers::codex_provider_catalog_tool_profile(provider);
         crate::codex_config::write_codex_provider_live_config_only_with_catalog(
             &settings,
             auth,
             config_text,
+            profile,
         )
         .map_err(|error| format!("write Codex live config failed: {error}"))
     }
@@ -3426,10 +3430,17 @@ impl ProxyService {
                     write_text_file(&get_codex_config_path(), config_text)
                         .map_err(|error| format!("write Codex config.toml failed: {error}"))
                 } else {
+                    // Verbatim restore has no Provider in hand (only the stored
+                    // backup config), so the catalog tool profile can't be
+                    // recovered. Default to ProxyChat: a restored native-direct
+                    // backup keeps its inline modelCatalog but would not get
+                    // apply_patch re-stripped until the next provider switch
+                    // rewrites it. Acceptable known limitation.
                     crate::codex_config::write_codex_live_with_catalog(
                         config,
                         auth,
                         Some(config_text),
+                        crate::codex_config::CodexCatalogToolProfile::ProxyChat,
                     )
                     .map_err(|error| format!("write Codex live config failed: {error}"))
                 }

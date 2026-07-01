@@ -15,6 +15,21 @@ pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
 
+/// Which Codex tool surface the generated model catalog should target.
+///
+/// - `ProxyChat`: cc-switch's proxy takes over and converts Responses<->Chat,
+///   so the catalog keeps Codex's default tool set (incl. the freeform
+///   `apply_patch` custom tool, which the proxy rewrites to a function tool).
+/// - `NativeResponses`: Codex talks directly to a provider's native
+///   `/responses` endpoint (no proxy). Such gateways (e.g. Xiaomi MiMo,
+///   MiniMax) reject `type=="custom"` tools, so the catalog must suppress the
+///   freeform `apply_patch` and rely on `shell_type="shell_command"` for edits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexCatalogToolProfile {
+    ProxyChat,
+    NativeResponses,
+}
+
 /// Reserved built-in provider IDs from OpenAI Codex's config/model-provider
 /// catalog. Keep in sync with Codex `RESERVED_MODEL_PROVIDER_IDS` and legacy
 /// removed provider aliases.
@@ -341,26 +356,62 @@ fn extract_codex_top_level_u64(config_text: &str, field: &str) -> Option<u64> {
 
 fn codex_catalog_model_entry(
     template: &Value,
-    model: &str,
-    display_name: &str,
-    context_window: u64,
+    spec: &CodexCatalogModelSpec,
     priority: usize,
+    profile: CodexCatalogToolProfile,
 ) -> Value {
     let mut entry = template.clone();
     let Some(entry_obj) = entry.as_object_mut() else {
         return json!({});
     };
 
-    entry_obj.insert("slug".to_string(), json!(model));
-    entry_obj.insert("display_name".to_string(), json!(display_name));
-    entry_obj.insert("description".to_string(), json!(display_name));
-    entry_obj.insert("context_window".to_string(), json!(context_window));
-    entry_obj.insert("max_context_window".to_string(), json!(context_window));
+    entry_obj.insert("slug".to_string(), json!(spec.model));
+    entry_obj.insert("display_name".to_string(), json!(spec.display_name));
+    entry_obj.insert("description".to_string(), json!(spec.display_name));
+    entry_obj.insert("context_window".to_string(), json!(spec.context_window));
+    entry_obj.insert("max_context_window".to_string(), json!(spec.context_window));
     entry_obj.insert("priority".to_string(), json!(1000 + priority));
     entry_obj.insert("additional_speed_tiers".to_string(), json!([]));
     entry_obj.insert("service_tiers".to_string(), json!([]));
     entry_obj.insert("availability_nux".to_string(), Value::Null);
     entry_obj.insert("upgrade".to_string(), Value::Null);
+
+    if profile == CodexCatalogToolProfile::NativeResponses {
+        // Native `/responses` gateways reject Codex's freeform `apply_patch`
+        // (type=="custom") tool. Strip any key that would make Codex emit a
+        // custom/freeform tool, and rely on shell_type="shell_command" for
+        // edits. Defensive even though the native template is already clean
+        // (guards against template drift / an accidental gpt-5.5 clone).
+        //
+        // NOTE: `base_instructions` is NOT stripped — Codex's catalog parser
+        // treats it as a REQUIRED field and refuses to load the file without
+        // it ("missing field `base_instructions`"). The template carries a
+        // neutral identity default; per-vendor official text overrides below.
+        for key in [
+            "apply_patch_tool_type",
+            "web_search_tool_type",
+            "tools",
+            "model_messages",
+        ] {
+            entry_obj.remove(key);
+        }
+        entry_obj.insert("shell_type".to_string(), json!("shell_command"));
+
+        if let Some(base_instructions) = spec
+            .base_instructions
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            entry_obj.insert("base_instructions".to_string(), json!(base_instructions));
+        }
+        if let Some(parallel) = spec.supports_parallel_tool_calls {
+            entry_obj.insert("supports_parallel_tool_calls".to_string(), json!(parallel));
+        }
+        if let Some(modalities) = &spec.input_modalities {
+            entry_obj.insert("input_modalities".to_string(), json!(modalities));
+        }
+    }
 
     entry
 }
@@ -370,6 +421,17 @@ struct CodexCatalogModelSpec {
     model: String,
     display_name: String,
     context_window: u64,
+    /// Per-row override for the native template's `supports_parallel_tool_calls`
+    /// (e.g. MiniMax=true, MiMo=false). Only consulted for `NativeResponses`.
+    supports_parallel_tool_calls: Option<bool>,
+    /// Per-row override for the native template's `input_modalities`
+    /// (e.g. `["text","image"]`). Only consulted for `NativeResponses`.
+    input_modalities: Option<Vec<String>>,
+    /// Per-row override for the native template's `base_instructions` (the
+    /// model identity / system preamble). Carries each vendor's OFFICIAL value;
+    /// falls back to the template default when absent. Only consulted for
+    /// `NativeResponses`.
+    base_instructions: Option<String>,
 }
 
 fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCatalogModelSpec> {
@@ -414,10 +476,37 @@ fn codex_catalog_model_specs(settings: &Value, config_text: &str) -> Vec<CodexCa
         )
         .unwrap_or(default_context_window);
 
+        let supports_parallel_tool_calls = model_config
+            .get("supportsParallelToolCalls")
+            .or_else(|| model_config.get("supports_parallel_tool_calls"))
+            .and_then(|value| value.as_bool());
+        let input_modalities = model_config
+            .get("inputModalities")
+            .or_else(|| model_config.get("input_modalities"))
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .filter(|items| !items.is_empty());
+        let base_instructions = model_config
+            .get("baseInstructions")
+            .or_else(|| model_config.get("base_instructions"))
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string);
+
         specs.push(CodexCatalogModelSpec {
             model: model.to_string(),
             display_name: display_name.to_string(),
             context_window,
+            supports_parallel_tool_calls,
+            input_modalities,
+            base_instructions,
         });
     }
 
@@ -499,19 +588,27 @@ fn load_codex_model_catalog_template() -> Result<Value, AppError> {
     )))
 }
 
-fn codex_model_catalog_from_specs(specs: &[CodexCatalogModelSpec], template: &Value) -> Value {
+/// Bundled clean template for native `/responses` providers. Unlike the
+/// gpt-5.5 template it carries NO freeform `apply_patch` / `web_search` tool
+/// declarations and no GPT-5 base_instructions, so Codex never emits a
+/// `type=="custom"` tool that native gateways (MiMo/MiniMax/…) reject. Edits
+/// flow through `shell_type="shell_command"` instead. We deliberately do NOT
+/// fall back to `models_cache.json` here (that would reintroduce gpt-5.5's
+/// freeform apply_patch).
+fn load_codex_native_responses_template() -> Value {
+    let text = include_str!("resources/codex_native_responses_template.json");
+    serde_json::from_str(text).expect("bundled codex native responses template must be valid JSON")
+}
+
+fn codex_model_catalog_from_specs(
+    specs: &[CodexCatalogModelSpec],
+    template: &Value,
+    profile: CodexCatalogToolProfile,
+) -> Value {
     let entries: Vec<Value> = specs
         .iter()
         .enumerate()
-        .map(|(index, spec)| {
-            codex_catalog_model_entry(
-                template,
-                &spec.model,
-                &spec.display_name,
-                spec.context_window,
-                index,
-            )
-        })
+        .map(|(index, spec)| codex_catalog_model_entry(template, spec, index, profile))
         .collect();
 
     json!({ "models": entries })
@@ -520,14 +617,23 @@ fn codex_model_catalog_from_specs(specs: &[CodexCatalogModelSpec], template: &Va
 fn codex_model_catalog_from_settings(
     settings: &Value,
     config_text: &str,
+    profile: CodexCatalogToolProfile,
 ) -> Result<Option<Value>, AppError> {
     let specs = codex_catalog_model_specs(settings, config_text);
     if specs.is_empty() {
         return Ok(None);
     }
 
-    let template = load_codex_model_catalog_template()?;
-    Ok(Some(codex_model_catalog_from_specs(&specs, &template)))
+    // Native providers use the bundled clean template (no freeform apply_patch,
+    // no cache dependency); proxy-chat providers keep cloning Codex's gpt-5.5
+    // entry so the proxy can rewrite custom<->function tools as before.
+    let template = match profile {
+        CodexCatalogToolProfile::NativeResponses => load_codex_native_responses_template(),
+        CodexCatalogToolProfile::ProxyChat => load_codex_model_catalog_template()?,
+    };
+    Ok(Some(codex_model_catalog_from_specs(
+        &specs, &template, profile,
+    )))
 }
 
 fn set_codex_model_catalog_json_field(
@@ -572,10 +678,11 @@ pub struct PreparedCodexConfigText {
 pub fn prepare_codex_config_text_with_model_catalog_payload(
     settings: &Value,
     config_text: &str,
+    profile: CodexCatalogToolProfile,
 ) -> Result<PreparedCodexConfigText, AppError> {
     let catalog_path = get_codex_model_catalog_path();
 
-    if let Some(catalog) = codex_model_catalog_from_settings(settings, config_text)? {
+    if let Some(catalog) = codex_model_catalog_from_settings(settings, config_text, profile)? {
         let config_text = set_codex_model_catalog_json_field(config_text, Some(&catalog_path))?;
         Ok(PreparedCodexConfigText {
             config_text,
@@ -601,8 +708,10 @@ pub fn write_prepared_codex_model_catalog(
 pub fn prepare_codex_config_text_with_model_catalog(
     settings: &Value,
     config_text: &str,
+    profile: CodexCatalogToolProfile,
 ) -> Result<String, AppError> {
-    let prepared = prepare_codex_config_text_with_model_catalog_payload(settings, config_text)?;
+    let prepared =
+        prepare_codex_config_text_with_model_catalog_payload(settings, config_text, profile)?;
     write_prepared_codex_model_catalog(&prepared)?;
     Ok(prepared.config_text)
 }
@@ -702,6 +811,26 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
             obj.insert("contextWindow".to_string(), json!(context_window));
         }
 
+        // Preserve native-profile per-row overrides so a DB-SSOT-missing
+        // fallback round-trip doesn't silently drop them (they are ignored by
+        // the ProxyChat profile, so carrying them is harmless).
+        if let Some(parallel) = entry
+            .get("supports_parallel_tool_calls")
+            .and_then(|v| v.as_bool())
+        {
+            obj.insert("supportsParallelToolCalls".to_string(), json!(parallel));
+        }
+        if let Some(modalities) = entry.get("input_modalities").and_then(|v| v.as_array()) {
+            let mods: Vec<String> = modalities
+                .iter()
+                .filter_map(|m| m.as_str())
+                .map(str::to_string)
+                .collect();
+            if !mods.is_empty() {
+                obj.insert("inputModalities".to_string(), json!(mods));
+            }
+        }
+
         entries.push(Value::Object(obj));
     }
 
@@ -716,9 +845,10 @@ pub fn write_codex_live_with_catalog(
     settings: &Value,
     auth: &Value,
     config_text: Option<&str>,
+    profile: CodexCatalogToolProfile,
 ) -> Result<(), AppError> {
     let prepared_config = config_text
-        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text))
+        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text, profile))
         .transpose()?;
 
     write_codex_live_atomic(auth, prepared_config.as_deref())
@@ -729,9 +859,10 @@ pub fn write_codex_provider_live_with_catalog(
     category: Option<&str>,
     auth: &Value,
     config_text: Option<&str>,
+    profile: CodexCatalogToolProfile,
 ) -> Result<(), AppError> {
     let prepared_config = config_text
-        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text))
+        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text, profile))
         .transpose()?;
 
     write_codex_live_for_provider(category, auth, prepared_config.as_deref())
@@ -1048,9 +1179,10 @@ pub fn write_codex_provider_live_config_only_with_catalog(
     settings: &Value,
     auth: &Value,
     config_text: Option<&str>,
+    profile: CodexCatalogToolProfile,
 ) -> Result<(), AppError> {
     let prepared_config = config_text
-        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text))
+        .map(|text| prepare_codex_config_text_with_model_catalog(settings, text, profile))
         .transpose()?;
     let live_config =
         prepare_codex_provider_live_config(auth, prepared_config.as_deref().unwrap_or(""))?;
@@ -1772,7 +1904,8 @@ experimental_bearer_token = "PROXY_MANAGED"
             }
         });
         let specs = codex_catalog_model_specs(&settings, r#"model_context_window = 128000"#);
-        let catalog = codex_model_catalog_from_specs(&specs, &template);
+        let catalog =
+            codex_model_catalog_from_specs(&specs, &template, CodexCatalogToolProfile::ProxyChat);
         let models = catalog
             .get("models")
             .and_then(Value::as_array)
@@ -1814,6 +1947,132 @@ experimental_bearer_token = "PROXY_MANAGED"
                 .get("availability_nux")
                 .is_some_and(Value::is_null),
             "generated third-party entries should not inherit GPT-5.5 launch messaging"
+        );
+    }
+
+    #[test]
+    fn native_responses_profile_suppresses_apply_patch_and_keeps_shell() {
+        // Native (direct) /responses providers must NOT emit a freeform
+        // apply_patch (type=="custom") tool — gateways like MiMo reject it.
+        // The native profile uses the bundled clean template and relies on
+        // shell_type="shell_command" for edits, plus per-row overrides.
+        let settings = json!({
+            "modelCatalog": {
+                "models": [
+                    {
+                        "model": "MiniMax-M3",
+                        "displayName": "MiniMax-M3",
+                        "contextWindow": 1_000_000,
+                        "supportsParallelToolCalls": true,
+                        "inputModalities": ["text", "image"],
+                        "baseInstructions": "You are Codex, a coding agent based on MiniMax-M3."
+                    }
+                ]
+            }
+        });
+
+        let catalog = codex_model_catalog_from_settings(
+            &settings,
+            "",
+            CodexCatalogToolProfile::NativeResponses,
+        )
+        .expect("native catalog generation should not error")
+        .expect("non-empty modelCatalog must yield a catalog");
+
+        let entry = &catalog["models"][0];
+        assert_eq!(
+            entry.get("slug").and_then(|v| v.as_str()),
+            Some("MiniMax-M3")
+        );
+        assert_eq!(
+            entry.get("shell_type").and_then(|v| v.as_str()),
+            Some("shell_command"),
+            "native entries edit via shell, not the custom apply_patch tool"
+        );
+        assert!(
+            entry.get("apply_patch_tool_type").is_none(),
+            "native entries must NOT declare a freeform apply_patch tool"
+        );
+        assert_eq!(
+            entry.get("base_instructions").and_then(|v| v.as_str()),
+            Some("You are Codex, a coding agent based on MiniMax-M3."),
+            "per-row baseInstructions override must apply (and field must exist)"
+        );
+        assert!(
+            entry.get("model_messages").is_none(),
+            "native entries must not carry the gpt-5.5 model_messages persona text"
+        );
+        assert_eq!(
+            entry.get("supports_parallel_tool_calls"),
+            Some(&json!(true)),
+            "per-row supportsParallelToolCalls override must apply"
+        );
+        assert_eq!(
+            entry.get("input_modalities"),
+            Some(&json!(["text", "image"])),
+            "per-row inputModalities override must apply"
+        );
+        assert_eq!(
+            entry.get("context_window").and_then(|v| v.as_u64()),
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn native_responses_catalog_always_carries_base_instructions() {
+        // Regression guard for the "missing field `base_instructions`" parse
+        // error: Codex refuses to load a model catalog whose entries lack
+        // base_instructions. Synthesized presets carry no per-row override, so
+        // the entry MUST inherit the template's neutral default.
+        let settings = json!({
+            "modelCatalog": { "models": [{ "model": "qwen3-coder-plus" }] }
+        });
+
+        let catalog = codex_model_catalog_from_settings(
+            &settings,
+            "",
+            CodexCatalogToolProfile::NativeResponses,
+        )
+        .expect("native catalog generation should not error")
+        .expect("non-empty modelCatalog must yield a catalog");
+
+        let base = catalog["models"][0]
+            .get("base_instructions")
+            .and_then(|v| v.as_str());
+        assert!(
+            base.is_some_and(|s| !s.trim().is_empty()),
+            "every native entry must carry a non-empty base_instructions (Codex requires it)"
+        );
+    }
+
+    #[test]
+    fn proxy_chat_profile_still_keeps_apply_patch() {
+        // Regression guard for Mode A: the proxy-chat profile must keep the
+        // freeform apply_patch tool (the proxy rewrites custom<->function).
+        let template = load_codex_native_responses_template();
+        let specs = vec![CodexCatalogModelSpec {
+            model: "x".to_string(),
+            display_name: "x".to_string(),
+            context_window: 128_000,
+            supports_parallel_tool_calls: None,
+            input_modalities: None,
+            base_instructions: None,
+        }];
+        // The native template lacks apply_patch_tool_type, so synthesize one to
+        // prove ProxyChat leaves it intact (no native stripping).
+        let mut proxy_template = template.clone();
+        proxy_template["apply_patch_tool_type"] = json!("freeform");
+        let catalog = codex_model_catalog_from_specs(
+            &specs,
+            &proxy_template,
+            CodexCatalogToolProfile::ProxyChat,
+        );
+        assert_eq!(
+            catalog["models"][0]
+                .get("apply_patch_tool_type")
+                .and_then(|v| v.as_str()),
+            Some("freeform"),
+            "ProxyChat must preserve apply_patch_tool_type (no native stripping)"
         );
     }
 
@@ -2006,8 +2265,14 @@ wire_api = "responses"
         let auth = settings.get("auth").expect("auth");
         let config_text = settings.get("config").and_then(Value::as_str);
 
-        write_codex_provider_live_with_catalog(&settings, Some("custom"), auth, config_text)
-            .expect("write Codex live config with catalog");
+        write_codex_provider_live_with_catalog(
+            &settings,
+            Some("custom"),
+            auth,
+            config_text,
+            CodexCatalogToolProfile::ProxyChat,
+        )
+        .expect("write Codex live config with catalog");
 
         let live_config = fs::read_to_string(get_codex_config_path()).expect("read config.toml");
         let parsed: toml::Value = toml::from_str(&live_config).expect("parse config.toml");

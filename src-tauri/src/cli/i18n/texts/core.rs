@@ -1502,6 +1502,22 @@ pub fn tui_label_codex_local_routing() -> &'static str {
     }
 }
 
+pub fn tui_label_codex_upstream_format() -> &'static str {
+    if is_chinese() {
+        "上游格式"
+    } else {
+        "Upstream format"
+    }
+}
+
+pub fn tui_label_codex_model_mapping() -> &'static str {
+    if is_chinese() {
+        "模型映射"
+    } else {
+        "Model mapping"
+    }
+}
+
 pub fn tui_codex_local_routing_title(provider: &str) -> String {
     let title = tui_label_codex_local_routing();
     if provider.trim().is_empty() {

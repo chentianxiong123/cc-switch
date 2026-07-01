@@ -1166,7 +1166,13 @@ pub(crate) fn provider_field_label_and_value(
         }
         ProviderAddField::Notes => strip_trailing_colon(texts::notes_label()).to_string(),
         ProviderAddField::ClaudeBaseUrl => texts::tui_label_base_url().to_string(),
-        ProviderAddField::ClaudeApiFormat => texts::tui_label_claude_api_format().to_string(),
+        ProviderAddField::ClaudeApiFormat => {
+            if provider.app_type == AppType::Codex {
+                texts::tui_label_codex_upstream_format().to_string()
+            } else {
+                texts::tui_label_claude_api_format().to_string()
+            }
+        }
         ProviderAddField::ClaudeApiKey => texts::tui_label_api_key().to_string(),
         ProviderAddField::ClaudeModelConfig => texts::tui_label_claude_model_config().to_string(),
         ProviderAddField::ClaudeFallbackModel => {
@@ -1179,7 +1185,7 @@ pub(crate) fn provider_field_label_and_value(
         ProviderAddField::CodexFastMode => texts::tui_label_codex_fast_mode().to_string(),
         ProviderAddField::CodexBaseUrl => texts::tui_label_base_url().to_string(),
         ProviderAddField::CodexModel => texts::model_label().to_string(),
-        ProviderAddField::CodexLocalRouting => texts::tui_label_codex_local_routing().to_string(),
+        ProviderAddField::CodexLocalRouting => texts::tui_label_codex_model_mapping().to_string(),
         ProviderAddField::CodexWireApi => {
             strip_trailing_colon(texts::codex_wire_api_label()).to_string()
         }
@@ -1220,6 +1226,7 @@ pub(crate) fn provider_field_label_and_value(
             texts::tui_label_hermes_rate_limit_delay().to_string()
         }
         ProviderAddField::ClaudeAdvancedDivider => "- - - - - - - - -".to_string(),
+        ProviderAddField::CodexAdvancedDivider => "- - - - - - - - -".to_string(),
         ProviderAddField::HermesAdvancedDivider => "- - - - - - - - -".to_string(),
         ProviderAddField::CommonConfigDivider => "- - - - - - - - -".to_string(),
         ProviderAddField::CommonSnippet => texts::tui_config_item_common_snippet().to_string(),
@@ -1256,7 +1263,7 @@ pub(crate) fn provider_field_label_and_value(
                 "[ ]".to_string()
             }
         }
-        ProviderAddField::CodexLocalRouting => String::new(),
+        ProviderAddField::CodexLocalRouting => provider.codex_model_catalog_summary(),
         ProviderAddField::IncludeCommonConfig => {
             if provider.include_common_config {
                 format!("[{}]", texts::tui_marker_active())
@@ -1472,6 +1479,7 @@ fn provider_field_is_divider(field: ProviderAddField) -> bool {
     matches!(
         field,
         ProviderAddField::ClaudeAdvancedDivider
+            | ProviderAddField::CodexAdvancedDivider
             | ProviderAddField::HermesAdvancedDivider
             | ProviderAddField::CommonConfigDivider
             | ProviderAddField::UsageQueryDivider
