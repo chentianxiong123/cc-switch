@@ -1156,6 +1156,20 @@ pub fn chat_completion_to_response(body: Value) -> Result<Value, ProxyError> {
     chat_completion_to_response_with_context(body, &CodexToolContext::default())
 }
 
+/// Whether a 2xx Chat Completions body actually encodes an upstream error, in which
+/// case an empty `choices` array must not be masked as a successful empty turn. Covers
+/// the standard top-level `error` object and MiniMax's non-standard `base_resp` with a
+/// non-zero `status_code` (both are recognized by `chat_error_to_response_error`).
+fn chat_body_encodes_error(body: &Value) -> bool {
+    if body.get("error").is_some_and(|error| !error.is_null()) {
+        return true;
+    }
+    matches!(
+        body.pointer("/base_resp/status_code").and_then(|v| v.as_i64()),
+        Some(code) if code != 0
+    )
+}
+
 /// Convert a non-streaming Chat Completions response into a Responses response,
 /// restoring Codex-specific tool names using the original Responses request.
 pub(crate) fn chat_completion_to_response_with_context(
@@ -1166,6 +1180,31 @@ pub(crate) fn chat_completion_to_response_with_context(
         .get("choices")
         .and_then(|v| v.as_array())
         .ok_or_else(|| ProxyError::TransformError("No choices in chat response".to_string()))?;
+
+    // Some upstreams (e.g. NVIDIA NIM's z-ai/glm-5.2) intermittently return a valid
+    // Chat Completions body whose `choices` is an empty array alongside a usage-only
+    // payload: {"id":"...","choices":[],"usage":{...}}. Treat this as an empty, already
+    // completed Responses turn instead of failing the whole request with a 502,
+    // mirroring how the Codex streaming path keeps usage and skips empty-choice chunks.
+    //
+    // Skip the synthesis when the body actually encodes an upstream error (standard
+    // `error` object or MiniMax's non-standard `base_resp`): such a body must not be
+    // masked as a successful empty turn.
+    if choices.is_empty() && !chat_body_encodes_error(&body) {
+        let response_id = response_id_from_chat_id(body.get("id").and_then(|v| v.as_str()));
+        let model = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
+        let created_at = body.get("created").and_then(|v| v.as_u64()).unwrap_or(0);
+        return Ok(json!({
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "completed",
+            "model": model,
+            "output": [],
+            "usage": chat_usage_to_responses_usage(body.get("usage"))
+        }));
+    }
+
     let choice = choices
         .first()
         .ok_or_else(|| ProxyError::TransformError("Empty choices in chat response".to_string()))?;
@@ -2613,6 +2652,78 @@ mod tests {
             "Gmail search emails"
         );
         assert_eq!(result["output"][0]["arguments"]["limit"], 10);
+    }
+
+    #[test]
+    fn chat_response_empty_choices_returns_empty_completed_response() {
+        // NVIDIA NIM's z-ai/glm-5.2 intermittently returns a usage-only body with an
+        // empty `choices` array. It must map to a valid completed Responses turn with
+        // empty output, not a 502 "Empty choices in chat response". (#325)
+        let chat = json!({
+            "id": "chatcmpl_empty",
+            "object": "chat.completion",
+            "created": 123,
+            "model": "z-ai/glm-5.2",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 13312,
+                "completion_tokens": 0,
+                "total_tokens": 13312
+            }
+        });
+
+        let result =
+            chat_completion_to_response_with_context(chat, &CodexToolContext::default()).unwrap();
+
+        assert_eq!(result["object"], "response");
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["id"], "resp_chatcmpl_empty");
+        assert_eq!(result["model"], "z-ai/glm-5.2");
+        assert_eq!(result["output"], json!([]));
+        assert_eq!(result["usage"]["input_tokens"], 13312);
+        assert_eq!(result["usage"]["output_tokens"], 0);
+    }
+
+    #[test]
+    fn chat_response_empty_choices_does_not_mask_error_body() {
+        // An error payload that also carries an empty `choices` array must not be
+        // silently converted into a successful empty turn.
+        let chat = json!({
+            "choices": [],
+            "error": {"message": "upstream exploded", "type": "server_error"}
+        });
+
+        let err = chat_completion_to_response_with_context(chat, &CodexToolContext::default())
+            .unwrap_err();
+        assert!(matches!(err, ProxyError::TransformError(_)));
+    }
+
+    #[test]
+    fn chat_response_empty_choices_does_not_mask_minimax_base_resp_error() {
+        // MiniMax-style upstreams encode errors in a non-standard `base_resp` with a
+        // non-zero status_code, sometimes on a 2xx body with empty `choices`. It must
+        // not be masked as a successful empty turn.
+        let chat = json!({
+            "choices": [],
+            "base_resp": {"status_code": 2013, "status_msg": "invalid params"}
+        });
+
+        let err = chat_completion_to_response_with_context(chat, &CodexToolContext::default())
+            .unwrap_err();
+        assert!(matches!(err, ProxyError::TransformError(_)));
+
+        // A successful MiniMax body carries status_code 0 and must still be treated as
+        // an empty turn when choices is empty.
+        let ok = json!({
+            "id": "chatcmpl_mm",
+            "choices": [],
+            "base_resp": {"status_code": 0, "status_msg": "success"},
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0}
+        });
+        let result =
+            chat_completion_to_response_with_context(ok, &CodexToolContext::default()).unwrap();
+        assert_eq!(result["status"], "completed");
+        assert_eq!(result["output"], json!([]));
     }
 
     #[test]
