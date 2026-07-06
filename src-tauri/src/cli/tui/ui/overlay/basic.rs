@@ -56,7 +56,7 @@ pub(super) fn render_confirm_overlay(
     theme: &theme::Theme,
     confirm: &crate::cli::tui::app::ConfirmOverlay,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_MD.0, OVERLAY_FIXED_MD.1, content_area);
+    let area = confirm_overlay_rect(content_area, &confirm.message);
     frame.render_widget(Clear, area);
     let outer = Block::default()
         .borders(Borders::ALL)
@@ -70,7 +70,7 @@ pub(super) fn render_confirm_overlay(
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(0)])
         .split(inner);
-    let body_area = inset_top(chunks[1], 1);
+    let body_area = inset_horizontal(inset_top(chunks[1], 1), 1);
 
     if matches!(
         confirm.action,
@@ -152,13 +152,14 @@ pub(super) fn render_confirm_overlay(
         );
     }
 
+    let alignment = message_block_alignment(&confirm.message, body_area.width);
     frame.render_widget(
         Paragraph::new(centered_message_lines(
             &confirm.message,
             body_area.width,
             body_area.height,
         ))
-        .alignment(Alignment::Center),
+        .alignment(alignment),
         body_area,
     );
 }

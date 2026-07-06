@@ -2239,8 +2239,20 @@ fn managed_auth_cancel_confirm_renders_above_login_toast() {
         all.contains(texts::tui_confirm_managed_auth_cancel_title()),
         "{all}"
     );
-    assert!(all.contains("Press Enter to cancel"), "{all}");
-    assert!(all.contains("Esc to keep waiting"), "{all}");
+    // The message may wrap at any word boundary, so match it on the
+    // border-stripped, whitespace-normalized text instead of a single row.
+    let flattened = all
+        .chars()
+        .map(|ch| match ch {
+            '│' | '┌' | '┐' | '└' | '┘' | '─' | '├' | '┤' => ' ',
+            other => other,
+        })
+        .collect::<String>();
+    let flattened = flattened.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flattened.contains("Press Enter to cancel, or Esc to keep waiting."),
+        "{all}"
+    );
 
     let key_bar_row = all
         .lines()
@@ -4468,6 +4480,46 @@ fn form_save_before_close_confirm_overlay_shows_save_exit_and_cancel_actions() {
 }
 
 #[test]
+fn common_config_notice_overlay_shows_all_paragraphs_without_mid_word_breaks() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    app.overlay = Overlay::Confirm(ConfirmOverlay {
+        title: texts::tui_common_config_notice_title().to_string(),
+        message: texts::tui_common_config_notice_message("claude"),
+        action: ConfirmAction::CommonConfigNotice,
+    });
+    let data = minimal_data(&app.app_type);
+
+    let buf = render(&app, &data);
+    let all = all_text(&buf);
+
+    // The dialog grows with its message: the last paragraph (F4 / Ctrl+S
+    // instructions) used to be clipped by the fixed-height overlay.
+    assert!(
+        all.contains("F4"),
+        "expected the extract-shortcut paragraph to be visible"
+    );
+    assert!(
+        all.contains("Ctrl+S"),
+        "expected the save-shortcut paragraph to be visible"
+    );
+
+    // Word wrapping keeps words intact: under the old per-character wrap,
+    // these words were split across rows ("setting" / "s shared",
+    // "default t" / "o attaching") and never appeared whole on any row.
+    for word in ["settings", "attaching", "providers."] {
+        assert!(
+            (0..buf.area.height).any(|y| line_at(&buf, y).contains(word)),
+            "expected {word:?} to render unbroken on a single row"
+        );
+    }
+}
+
+#[test]
 fn claude_api_format_picker_overlay_is_compact_and_padded() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -4907,6 +4959,14 @@ fn speedtest_result_overlay_is_compact_when_lines_are_short() {
     assert!(
         overlay_width < 70,
         "short result overlay should be compact, got width {overlay_width}"
+    );
+
+    // The compact rect must leave room for every line: the last one
+    // ("Status: …") used to be clipped by a one-row chrome undercount.
+    let status_line = texts::tui_speedtest_line_status("200");
+    assert!(
+        (0..buf.area.height).any(|y| line_at(&buf, y).contains(status_line.trim())),
+        "last compact overlay line should be visible"
     );
 }
 

@@ -575,6 +575,19 @@ pub(super) fn inset_left(area: Rect, left: u16) -> Rect {
     }
 }
 
+pub(super) fn inset_horizontal(area: Rect, inset: u16) -> Rect {
+    let shrink = inset.saturating_mul(2);
+    if area.width <= shrink {
+        return area;
+    }
+    Rect {
+        x: area.x + inset,
+        y: area.y,
+        width: area.width - shrink,
+        height: area.height,
+    }
+}
+
 pub(super) fn inset_top(area: Rect, top: u16) -> Rect {
     if area.height <= top {
         return Rect {

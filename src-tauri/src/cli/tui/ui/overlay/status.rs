@@ -250,7 +250,7 @@ pub(super) fn render_update_result_overlay(
     success: bool,
     message: &str,
 ) {
-    let area = centered_rect_fixed(OVERLAY_FIXED_SM.0, OVERLAY_FIXED_SM.1, content_area);
+    let area = adaptive_message_overlay_rect(content_area, OVERLAY_FIXED_SM, message);
     frame.render_widget(Clear, area);
 
     let border_color = if success {
@@ -283,7 +283,7 @@ pub(super) fn render_update_result_overlay(
         ]
     };
     render_key_bar_center(frame, chunks[0], theme, &keys);
-    let body_area = inset_top(chunks[1], 1);
+    let body_area = inset_horizontal(inset_top(chunks[1], 1), 1);
 
     frame.render_widget(
         Paragraph::new(centered_message_lines(
@@ -291,7 +291,7 @@ pub(super) fn render_update_result_overlay(
             body_area.width,
             body_area.height,
         ))
-        .alignment(Alignment::Center),
+        .alignment(message_block_alignment(message, body_area.width)),
         body_area,
     );
 }
