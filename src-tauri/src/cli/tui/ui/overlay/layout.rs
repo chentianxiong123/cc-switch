@@ -36,16 +36,17 @@ pub(crate) fn compact_lines_overlay_rect(
         .max(UnicodeWidthStr::width(title)) as u16;
     let width = content_width.saturating_add(8).clamp(min_width, max_width);
 
-    let inner_width = width.saturating_sub(2).max(1);
+    let inner_width = width.saturating_sub(OVERLAY_CHROME_COLS).max(1);
     let wrapped_height = lines
         .iter()
         .map(|line| wrap_message_lines(line, inner_width).len().max(1) as u16)
         .sum::<u16>()
         .max(1);
     let max_height = content_area.height.saturating_sub(4).max(1);
-    // Vertical chrome consumed by the render path: 2 border rows + the key
-    // bar + the gap row above the body.
-    let height = wrapped_height.saturating_add(4).max(6).min(max_height);
+    let height = wrapped_height
+        .saturating_add(OVERLAY_CHROME_ROWS)
+        .max(6)
+        .min(max_height);
 
     centered_rect_fixed(width, height, content_area)
 }
@@ -58,12 +59,10 @@ pub(crate) fn adaptive_message_overlay_rect(
     message: &str,
 ) -> Rect {
     let width = min_size.0.min(content_area.width);
-    // Horizontal chrome: 2 border columns + 2 padding columns.
-    let inner_width = width.saturating_sub(4).max(1);
+    let inner_width = width.saturating_sub(OVERLAY_CHROME_COLS).max(1);
     let body_lines = wrap_message_lines(message, inner_width).len() as u16;
-    // Vertical chrome: 2 border rows + key bar + gap above the body.
     let height = body_lines
-        .saturating_add(4)
+        .saturating_add(OVERLAY_CHROME_ROWS)
         .max(min_size.1)
         .min(content_area.height);
 
