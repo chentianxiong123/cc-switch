@@ -8,7 +8,8 @@ pub(super) fn render_skills_discover(
     theme: &super::theme::Theme,
 ) {
     let title = format!(
-        "{} — {}",
+        "{} › {} — {}",
+        texts::menu_manage_skills(),
         texts::tui_skills_discover_title(),
         if app.skills_discover_query.trim().is_empty() {
             texts::tui_skills_discover_query_empty()

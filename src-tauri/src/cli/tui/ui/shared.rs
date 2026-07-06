@@ -107,6 +107,12 @@ pub(super) fn truncate_to_display_width(text: &str, width: u16) -> String {
     out
 }
 
+/// Sub-page titles show their place in the hierarchy (" Usage › Details ")
+/// so nesting depth stays visible and Esc's destination is predictable.
+pub(super) fn breadcrumb_title(segments: &[&str]) -> String {
+    format!(" {} ", segments.join(" › "))
+}
+
 /// Centered guidance for empty list screens: a bold title, a muted
 /// subtitle, and key chips for the actions that create the first entry.
 /// The first action renders as the primary (accent) chip.

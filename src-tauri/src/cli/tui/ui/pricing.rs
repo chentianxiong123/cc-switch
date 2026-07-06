@@ -13,7 +13,10 @@ pub(super) fn render_pricing(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", pricing_text("Model Pricing", "模型定价")));
+        .title(breadcrumb_title(&[
+            pricing_text("Usage Statistics", "使用统计"),
+            pricing_text("Model Pricing", "模型定价"),
+        ]));
     frame.render_widget(outer.clone(), area);
 
     let chunks = Layout::default()

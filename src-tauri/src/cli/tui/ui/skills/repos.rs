@@ -11,7 +11,11 @@ pub(super) fn render_skills_repos(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::tui_skills_repos_title()));
+        .title(breadcrumb_title(&[
+            texts::menu_manage_skills(),
+            texts::tui_skills_discover_title(),
+            texts::tui_skills_repos_title(),
+        ]));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 

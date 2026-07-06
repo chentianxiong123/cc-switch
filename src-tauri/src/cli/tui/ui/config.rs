@@ -101,7 +101,10 @@ pub(super) fn render_config_webdav(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::tui_config_webdav_title()));
+        .title(breadcrumb_title(&[
+            texts::tui_config_title(),
+            texts::tui_config_webdav_title(),
+        ]));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 
@@ -2321,7 +2324,10 @@ fn render_openclaw_daily_memory(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::tui_openclaw_daily_memory_title()));
+        .title(breadcrumb_title(&[
+            texts::tui_openclaw_workspace_title(),
+            texts::tui_openclaw_daily_memory_title(),
+        ]));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
     let chunks = Layout::default()
@@ -2671,10 +2677,10 @@ pub(super) fn render_settings_managed_accounts(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(
-            " {} ",
-            texts::tui_settings_managed_accounts_title()
-        ));
+        .title(breadcrumb_title(&[
+            texts::menu_settings(),
+            texts::tui_settings_managed_accounts_title(),
+        ]));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 
@@ -3168,7 +3174,10 @@ pub(super) fn render_settings_proxy(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::tui_settings_proxy_title()));
+        .title(breadcrumb_title(&[
+            texts::menu_settings(),
+            texts::tui_settings_proxy_title(),
+        ]));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 

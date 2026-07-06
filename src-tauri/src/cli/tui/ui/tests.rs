@@ -486,7 +486,7 @@ fn tui_usage_details_tables_follow_selected_range() {
     };
 
     let week = all_text(&render_with_size(&app, &data, 160, 40));
-    assert!(week.contains("Usage Details"), "{week}");
+    assert!(week.contains("Usage Statistics › Details"), "{week}");
     assert!(week.contains("Model Stats"), "{week}");
     assert!(week.contains("Provider Stats"), "{week}");
     assert!(week.contains("Request Logs"), "{week}");
@@ -8687,8 +8687,13 @@ fn workspace_daily_memory_route_render_keeps_existing_structure() {
         !content.contains(&buffer_cell_text("Workspace 文件")),
         "{content}"
     );
+    // The workspace name is allowed (and expected) in the breadcrumb title.
     assert!(
-        !content.contains(&buffer_cell_text(texts::tui_openclaw_workspace_title())),
+        content.contains(&buffer_cell_text(&format!(
+            "{} › {}",
+            texts::tui_openclaw_workspace_title(),
+            texts::tui_openclaw_daily_memory_title()
+        ))),
         "{content}"
     );
 }

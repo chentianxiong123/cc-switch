@@ -50,7 +50,10 @@ pub(super) fn render_usage_logs(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", usage_text("Usage Details", "用量详情")));
+        .title(breadcrumb_title(&[
+            usage_text("Usage Statistics", "使用统计"),
+            usage_text("Details", "详情"),
+        ]));
     frame.render_widget(outer.clone(), area);
 
     let chunks = Layout::default()
@@ -99,10 +102,11 @@ pub(super) fn render_usage_log_detail(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(
-            " {} ",
-            usage_text("Usage Log Detail", "用量日志详情")
-        ));
+        .title(breadcrumb_title(&[
+            usage_text("Usage Statistics", "使用统计"),
+            usage_text("Details", "详情"),
+            usage_text("Log", "日志"),
+        ]));
     frame.render_widget(outer.clone(), area);
 
     let chunks = Layout::default()
