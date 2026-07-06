@@ -360,10 +360,10 @@ pub(super) fn render_footer(
         // comment blue, action keys on the same surface used by the page
         // key bars, so the footer reads as part of one system.
         let nav_key_style = Style::default()
-            .fg(theme.fg_strong)
+            .fg(theme.on_comment)
             .bg(theme.comment)
             .add_modifier(Modifier::BOLD);
-        let nav_desc_style = Style::default().fg(theme.fg_strong).bg(theme.comment);
+        let nav_desc_style = Style::default().fg(theme.on_comment).bg(theme.comment);
         let act_key_style = Style::default()
             .fg(theme.fg_strong)
             .bg(theme.surface)

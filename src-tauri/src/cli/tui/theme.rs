@@ -88,6 +88,9 @@ pub struct Theme {
     pub surface: Color,
     /// Strong foreground for emphasized text and text on `surface`.
     pub fg_strong: Color,
+    /// Foreground for text sitting on a `comment` background; the comment
+    /// blue stays mid-dark in both palettes, so this is always light.
+    pub on_comment: Color,
     /// Foreground for text sitting on an accent background.
     pub on_accent: Color,
     pub no_color: bool,
@@ -228,10 +231,6 @@ fn terminal_color(color_mode: ColorMode, rgb: (u8, u8, u8)) -> Color {
     }
 }
 
-pub(crate) fn terminal_palette_color(rgb: (u8, u8, u8)) -> Color {
-    terminal_color(detected_color_mode(), rgb)
-}
-
 fn accent_rgb(app: &AppType, light: bool) -> (u8, u8, u8) {
     if light {
         return match app {
@@ -326,6 +325,7 @@ pub fn theme_for_mode(app: &AppType, mode: ThemeMode) -> Theme {
         cyan: terminal_color(color_mode, cyan),
         surface: terminal_color(color_mode, surface),
         fg_strong: terminal_color(color_mode, fg_strong),
+        on_comment: terminal_color(color_mode, (255, 255, 255)),
         // Light-mode accents are dark enough to carry white text; the
         // bright Dracula accents need dark text.
         on_accent: terminal_color(

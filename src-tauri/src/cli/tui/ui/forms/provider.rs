@@ -526,7 +526,7 @@ fn render_quick_config_form(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", title.to_string()));
+        .title(format!(" {title} "));
     frame.render_widget(outer.clone(), area);
     let inner = outer.inner(area);
 
