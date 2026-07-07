@@ -60,12 +60,12 @@ pub fn read_head_tail_lines(
     head_n: usize,
     tail_n: usize,
 ) -> io::Result<(Vec<String>, Vec<String>)> {
-    let file = File::open(path)?;
+    let mut file = File::open(path)?;
     let file_len = file.metadata()?.len();
 
     // For small files, read all lines once and split
     if file_len < 16_384 {
-        let reader = BufReader::new(file);
+        let reader = BufReader::new(&file);
         let all: Vec<String> = reader.lines().map_while(Result::ok).collect();
         let head = all.iter().take(head_n).cloned().collect();
         let skip = all.len().saturating_sub(tail_n);
@@ -73,16 +73,20 @@ pub fn read_head_tail_lines(
         return Ok((head, tail));
     }
 
-    // Read head lines from the beginning
-    let reader = BufReader::new(file);
-    let head: Vec<String> = reader.lines().take(head_n).map_while(Result::ok).collect();
+    // Read head lines from the beginning. Borrow the handle so the same open file
+    // can be seeked for the tail below instead of reopening it a second time.
+    let head: Vec<String> = {
+        let reader = BufReader::new(&file);
+        reader.lines().take(head_n).map_while(Result::ok).collect()
+    };
 
-    // Seek to last ~16 KB for tail lines
+    // Seek to last ~16 KB for tail lines, reusing the same file handle.
     let seek_pos = file_len.saturating_sub(16_384);
-    let mut file2 = File::open(path)?;
-    file2.seek(SeekFrom::Start(seek_pos))?;
-    let tail_reader = BufReader::new(file2);
-    let all_tail: Vec<String> = tail_reader.lines().map_while(Result::ok).collect();
+    file.seek(SeekFrom::Start(seek_pos))?;
+    let all_tail: Vec<String> = BufReader::new(&file)
+        .lines()
+        .map_while(Result::ok)
+        .collect();
 
     // Skip first partial line if we seeked into the middle of a line
     let skip_first = if seek_pos > 0 { 1 } else { 0 };
@@ -246,6 +250,80 @@ pub fn build_snippet(haystack: &str, needle: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+
+    #[test]
+    fn read_head_tail_small_file_reads_all_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("small.jsonl");
+        let mut f = File::create(&path).expect("create");
+        for i in 0..8 {
+            writeln!(f, "line-{i}").expect("write");
+        }
+        drop(f);
+
+        let (head, tail) = read_head_tail_lines(&path, 3, 2).expect("read");
+        assert_eq!(head, vec!["line-0", "line-1", "line-2"]);
+        assert_eq!(tail, vec!["line-6", "line-7"]);
+    }
+
+    #[test]
+    fn read_head_tail_large_file_seeks_for_tail() {
+        // Build a file well over the 16 KB threshold so the seek path runs.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("large.jsonl");
+        let mut f = File::create(&path).expect("create");
+        let total = 4_000; // each line ~12 bytes → ~48 KB
+        for i in 0..total {
+            writeln!(f, "line-{i:07}").expect("write");
+        }
+        drop(f);
+
+        let (head, tail) = read_head_tail_lines(&path, 4, 3).expect("read");
+        assert_eq!(
+            head,
+            vec![
+                "line-0000000",
+                "line-0000001",
+                "line-0000002",
+                "line-0000003"
+            ]
+        );
+        // The tail must be the genuine last lines, and the seek-into-a-partial-line
+        // handling must never leak a truncated fragment.
+        assert_eq!(tail, vec!["line-0003997", "line-0003998", "line-0003999"]);
+        for line in head.iter().chain(tail.iter()) {
+            assert!(line.starts_with("line-") && line.len() == "line-0000000".len());
+        }
+    }
+
+    #[test]
+    fn read_head_tail_large_file_matches_full_read() {
+        // Cross-check the seek path against a naive full read of the same file.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("cmp.jsonl");
+        let mut f = File::create(&path).expect("create");
+        for i in 0..5_000 {
+            // Vary line width so a fixed 16 KB seek lands mid-line.
+            writeln!(f, "row{i}-{}", "x".repeat(i % 7)).expect("write");
+        }
+        drop(f);
+
+        let all: Vec<String> = std::io::BufReader::new(File::open(&path).expect("open"))
+            .lines()
+            .map_while(Result::ok)
+            .collect();
+        let expected_head: Vec<String> = all.iter().take(10).cloned().collect();
+        let expected_tail: Vec<String> = all
+            .iter()
+            .skip(all.len().saturating_sub(20))
+            .cloned()
+            .collect();
+
+        let (head, tail) = read_head_tail_lines(&path, 10, 20).expect("read");
+        assert_eq!(head, expected_head);
+        assert_eq!(tail, expected_tail);
+    }
 
     #[test]
     fn parse_timestamp_to_ms_supports_integers_and_rfc3339() {
