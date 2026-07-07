@@ -60,8 +60,8 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
 
     crate::services::session_usage::sync_progress::add_total(files.len() as u32);
 
-    for file_path in &files {
-        match sync_single_gemini_file(db, file_path, &mut pricing_cache) {
+    for (file_path, file_mtime) in &files {
+        match sync_single_gemini_file(db, file_path, *file_mtime, &mut pricing_cache) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -87,9 +87,12 @@ pub fn sync_gemini_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     Ok(result)
 }
 
-/// 收集所有 Gemini 会话 JSON 文件
-fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
+/// 收集所有 Gemini 会话 JSON 文件，返回 `(路径, mtime 纳秒)` 并按 mtime 降序
+/// 排序（最近修改的会话最先入库）。walk 阶段顺带取 mtime，既用于排序也传给
+/// 后续 `sync_single_gemini_file`，避免二次 stat（读取失败记 0，交由后者回退
+/// 处理）。照抄 claude/codex 的 `push_xxx_file` 模式。
+fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<(PathBuf, i64)> {
+    let mut files: Vec<(PathBuf, i64)> = Vec::new();
 
     let tmp_dir = gemini_dir.join("tmp");
     if !tmp_dir.is_dir() {
@@ -121,29 +124,57 @@ fn collect_gemini_session_files(gemini_dir: &Path) -> Vec<PathBuf> {
                 .map(|n| n.starts_with("session-") && n.ends_with(".json"))
                 .unwrap_or(false);
             if is_session {
-                files.push(path);
+                push_gemini_file(&mut files, path);
             }
         }
     }
 
+    // mtime 降序：首次导入时最近的会话最先入库，Usage 默认 Today/7d 尽快出数。
+    files.sort_unstable_by(|a, b| b.1.cmp(&a.1));
     files
 }
 
+/// 记录一个 Gemini 会话文件及其 mtime（读取失败记 0）。
+fn push_gemini_file(files: &mut Vec<(PathBuf, i64)>, path: PathBuf) {
+    let mtime = fs::metadata(&path)
+        .map(|m| metadata_modified_nanos(&m))
+        .unwrap_or(0);
+    files.push((path, mtime));
+}
+
 /// 同步单个 Gemini 会话 JSON 文件，返回 (imported, skipped)
+///
+/// `file_mtime` 为 walk 阶段取得的 mtime 纳秒值；>0 时直接复用避免二次 stat，
+/// 为 0 时回退一次 metadata 读取，保留“元数据不可读即报错”语义。Gemini 是整
+/// 文件解析、无字节续传，仅遵循 mtime 跳过契约；但对齐 JSONL 驱动，"将要跳过
+/// 前"重取一次新鲜 mtime 复查，关闭 walk→处理之间文件被追加/重写的窗口。
 fn sync_single_gemini_file(
     db: &Database,
     file_path: &Path,
+    file_mtime: i64,
     pricing_cache: &mut PricingCache,
 ) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
 
-    // 获取文件元数据
-    let metadata = fs::metadata(file_path)
-        .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
-    let file_modified = metadata_modified_nanos(&metadata);
+    // mtime：优先复用 walk 阶段的值，为 0 时回退一次 metadata 读取。
+    let mut file_modified = if file_mtime > 0 {
+        file_mtime
+    } else {
+        let metadata = fs::metadata(file_path)
+            .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
+        metadata_modified_nanos(&metadata)
+    };
 
     // 检查同步状态
     let (last_modified, _last_offset) = get_sync_state(db, &file_path_str)?;
+
+    // walk 阶段的 mtime 可能在长同步期间过期：将要跳过前重取一次新鲜 mtime 复查，
+    // 关闭 walk→处理之间文件被追加的窗口。重取失败（文件可能刚被删除）按原值跳过。
+    if file_mtime > 0 && file_modified <= last_modified {
+        if let Ok(metadata) = fs::metadata(file_path) {
+            file_modified = metadata_modified_nanos(&metadata);
+        }
+    }
 
     // 文件未变化则跳过
     if file_modified <= last_modified {
@@ -425,6 +456,51 @@ mod tests {
     fn test_collect_gemini_session_files_nonexistent() {
         let files = collect_gemini_session_files(Path::new("/nonexistent/path"));
         assert!(files.is_empty());
+    }
+
+    /// 收集函数返回按 mtime 降序：用显式 set_modified 控制两个文件的先后，断言
+    /// 较新的会话文件排在前（最新优先，Usage 默认 Today/7d 尽快出数）。
+    #[test]
+    fn test_collect_gemini_session_files_orders_newest_first() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let chats = tmp.path().join("tmp").join("proj").join("chats");
+        fs::create_dir_all(&chats).expect("create chats dir");
+
+        let older = chats.join("session-old.json");
+        let newer = chats.join("session-new.json");
+        fs::write(&older, "{}").expect("write older");
+        fs::write(&newer, "{}").expect("write newer");
+
+        // 显式设置 mtime：newer 比 older 晚 10 秒（不依赖文件系统时间粒度）。
+        let base = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&older)
+            .expect("open older")
+            .set_modified(base)
+            .expect("set older mtime");
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&newer)
+            .expect("open newer")
+            .set_modified(base + std::time::Duration::from_secs(10))
+            .expect("set newer mtime");
+
+        let files = collect_gemini_session_files(tmp.path());
+        assert_eq!(files.len(), 2);
+        // 降序：newer 在前，older 在后。
+        assert!(
+            files[0].0.ends_with("session-new.json"),
+            "最新文件应排在最前: {:?}",
+            files[0].0
+        );
+        assert!(
+            files[1].0.ends_with("session-old.json"),
+            "较旧文件应排在最后: {:?}",
+            files[1].0
+        );
+        // 携带的 mtime 也应是降序（newer 的 mtime 更大）。
+        assert!(files[0].1 > files[1].1, "mtime 应降序");
     }
 
     #[test]
