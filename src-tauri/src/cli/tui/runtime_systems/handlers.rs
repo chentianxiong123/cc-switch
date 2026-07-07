@@ -227,6 +227,16 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
             result,
         } => match result {
             Ok(()) => {
+                // 删除与在途扫描竞态：删除成功（文件已落盘删除）时若仍有扫描在跑，
+                // 登记 UI tombstone。扫描线程可能在删除前就读到了该会话，其后到达
+                // 的 partial/finished 会带着旧列表把它放回；tombstone 让 apply_*/
+                // finish_scan 过滤掉该行（finish_scan 终态清空 tombstone）。
+                // 注：在途 revalidate 仍可能把我们刚 purge 的 sidecar 行重新 upsert
+                // 回去，不跨线程强行阻止——(a) 此 tombstone 保证该行不渲染；(b) 下一轮
+                // revalidate 发现文件缺失会走 deletes 自愈 sidecar。
+                if app.sessions.scan_active.is_some() {
+                    app.sessions.scan_tombstones.insert(key.clone());
+                }
                 if app.sessions.finish_delete(request_id, &key) {
                     let visible_len = crate::cli::tui::app::visible_sessions_for_state(
                         &app.filter,
