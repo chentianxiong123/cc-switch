@@ -67,8 +67,18 @@ impl ScanCacheStore {
                 std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
             }
         }
-        let conn = Connection::open(path)
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW;
+        let conn = Connection::open_with_flags(path, flags)
             .map_err(|e| AppError::Database(format!("打开会话扫描缓存库失败: {e}")))?;
+        // 与主库一致：缓存虽可重建，但含会话元数据与绝对路径，unix 下收紧为 0600
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
         Self::from_connection(conn)
     }
 
