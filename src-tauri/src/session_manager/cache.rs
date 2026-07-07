@@ -255,12 +255,22 @@ pub fn scan_provider_cached<F>(
 where
     F: Fn(&Path) -> Option<SessionMeta> + Sync,
 {
+    let started = std::time::Instant::now();
     let cached = store.load_for_provider(provider).unwrap_or_else(|err| {
         log::warn!("session scan cache load failed for {provider}: {err}");
         HashMap::new()
     });
 
+    let target_count = targets.len();
+    let cached_count = cached.len();
     let delta = revalidate(provider, targets, cached, force, parse);
+    log::debug!(
+        "[SESSION-SCAN] provider={provider} targets={target_count} cached={cached_count} \
+         reparsed={} deleted={} force={force} elapsed={:?}",
+        delta.upserts.len(),
+        delta.deletes.len(),
+        started.elapsed()
+    );
 
     if !delta.upserts.is_empty() {
         if let Err(err) = store.upsert_batch(&delta.upserts) {

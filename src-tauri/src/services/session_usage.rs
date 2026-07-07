@@ -343,7 +343,9 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
     let mut pricing_cache = PricingCache::new();
 
     // sidecar 字节续传提示：打不开时优雅降级为行 offset 路径。
-    let resume_store = ScanCacheStore::open().ok();
+    let resume_store = ScanCacheStore::open()
+        .inspect_err(|e| log::debug!("[SESSION-SYNC] sidecar 打开失败，禁用字节续传: {e}"))
+        .ok();
 
     sync_progress::add_total(jsonl_files.len() as u32);
 

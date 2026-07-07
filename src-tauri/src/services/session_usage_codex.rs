@@ -179,7 +179,9 @@ pub fn sync_codex_usage(db: &Database) -> Result<SessionSyncResult, AppError> {
     let mut pricing_cache = PricingCache::new();
 
     // sidecar 字节续传提示：打不开时优雅降级为全文件重放路径。
-    let resume_store = ScanCacheStore::open().ok();
+    let resume_store = ScanCacheStore::open()
+        .inspect_err(|e| log::debug!("[CODEX-SYNC] sidecar 打开失败，禁用字节续传: {e}"))
+        .ok();
 
     crate::services::session_usage::sync_progress::add_total(files.len() as u32);
 

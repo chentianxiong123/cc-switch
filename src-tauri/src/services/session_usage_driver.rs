@@ -102,18 +102,24 @@ fn decide_resume<S: DeserializeOwned>(
     file: &mut fs::File,
     file_len: u64,
     hint: Option<SyncResumeHint>,
+    file_path: &str,
 ) -> ResumeDecision<S> {
     let Some(hint) = hint else {
+        // 无提示（首次运行/权威行不匹配）是最常见路径，不值得逐文件记录
         return ResumeDecision::LineSkipFallback;
     };
 
     let byte_offset = hint.byte_offset as u64;
     // 文件比上次的续传位置还短：同路径被截断/重写过
     if byte_offset > file_len {
+        log::debug!(
+            "[SYNC-DRIVER] 文件被截断（len={file_len} < offset={byte_offset}），全量重扫: {file_path}"
+        );
         return ResumeDecision::RescanFromZero;
     }
     // 旧版提示无指纹：既不能证实也不能证伪身份，保守走行 offset 路径
     let Some(expected) = hint.tail_hash else {
+        log::debug!("[SYNC-DRIVER] 提示缺尾部指纹，回退行 offset 路径: {file_path}");
         return ResumeDecision::LineSkipFallback;
     };
 
@@ -127,9 +133,15 @@ fn decide_resume<S: DeserializeOwned>(
     })();
     match tail_ok {
         // 指纹失配：边界前内容变了，文件被整体重写
-        Some(false) => return ResumeDecision::RescanFromZero,
+        Some(false) => {
+            log::debug!("[SYNC-DRIVER] 尾部指纹失配（同路径被重写），全量重扫: {file_path}");
+            return ResumeDecision::RescanFromZero;
+        }
         // 读不出来（IO 抖动）：无证据，保守回退
-        None => return ResumeDecision::LineSkipFallback,
+        None => {
+            log::debug!("[SYNC-DRIVER] 尾部指纹读取失败，回退行 offset 路径: {file_path}");
+            return ResumeDecision::LineSkipFallback;
+        }
         Some(true) => {}
     }
 
@@ -141,8 +153,14 @@ fn decide_resume<S: DeserializeOwned>(
         .and_then(|s| serde_json::from_str::<S>(s).ok())
     {
         // read_exact 结束后游标恰好位于 byte_offset，无需再次 seek
-        Some(state) => ResumeDecision::Resume { byte_offset, state },
-        None => ResumeDecision::LineSkipFallback,
+        Some(state) => {
+            log::debug!("[SYNC-DRIVER] 字节续传命中 offset={byte_offset}: {file_path}");
+            ResumeDecision::Resume { byte_offset, state }
+        }
+        None => {
+            log::debug!("[SYNC-DRIVER] 提示状态无法反序列化，回退行 offset 路径: {file_path}");
+            ResumeDecision::LineSkipFallback
+        }
     }
 }
 
@@ -202,7 +220,7 @@ where
 
     // 字节续传决策（指纹校验可能移动过游标，非 Resume 路径必须归零）
     let hint = load_matching_resume_hint(resume, &file_path_str, last_modified, last_offset);
-    let decision = decide_resume::<S>(&mut file, file_len, hint);
+    let decision = decide_resume::<S>(&mut file, file_len, hint, &file_path_str);
 
     // effective_last_offset：本轮用于 is_new 判断的行 offset。文件身份失效
     // 时权威行 offset 描述的是旧文件，必须归零全量重扫，否则新文件的前
@@ -286,10 +304,15 @@ where
     // `file_modified <= last_modified` 直接跳过、该行永久漏导。回退 1ns 保证
     // 下一轮必然复查（借助提示从边界 seek，只重读尾部，代价极小）。
     let recorded_modified = if saw_incomplete_tail {
+        log::debug!("[SYNC-DRIVER] 末尾存在不完整行，记录 mtime-1 以便下轮复查: {file_path_str}");
         file_modified - 1
     } else {
         file_modified
     };
+
+    log::debug!(
+        "[SYNC-DRIVER] 扫描完成 lines={committed_line_offset} bytes={committed_byte_pos} incomplete_tail={saw_incomplete_tail}: {file_path_str}"
+    );
 
     Ok(Some(JsonlScanOutcome {
         line_offset: committed_line_offset,

@@ -745,8 +745,9 @@ pub(crate) struct BulkImportDurabilityGuard<'a> {
 impl Drop for BulkImportDurabilityGuard<'_> {
     fn drop(&mut self) {
         if let Ok(conn) = self.db.conn.lock() {
-            if let Err(e) = conn.pragma_update(None, "synchronous", "FULL") {
-                log::warn!("恢复 synchronous=FULL 失败: {e}");
+            match conn.pragma_update(None, "synchronous", "FULL") {
+                Ok(()) => log::debug!("[BULK-IMPORT] 本连接恢复 synchronous=FULL"),
+                Err(e) => log::warn!("[BULK-IMPORT] 恢复 synchronous=FULL 失败: {e}"),
             }
         }
     }
@@ -756,8 +757,9 @@ impl Database {
     /// 见 [`BulkImportDurabilityGuard`]。设置失败只降速不影响正确性。
     pub(crate) fn bulk_import_durability_guard(&self) -> BulkImportDurabilityGuard<'_> {
         if let Ok(conn) = self.conn.lock() {
-            if let Err(e) = conn.pragma_update(None, "synchronous", "NORMAL") {
-                log::debug!("设置 synchronous=NORMAL 失败: {e}");
+            match conn.pragma_update(None, "synchronous", "NORMAL") {
+                Ok(()) => log::debug!("[BULK-IMPORT] 本连接 synchronous=NORMAL（导入期间）"),
+                Err(e) => log::debug!("[BULK-IMPORT] 设置 synchronous=NORMAL 失败: {e}"),
             }
         }
         BulkImportDurabilityGuard { db: self }
