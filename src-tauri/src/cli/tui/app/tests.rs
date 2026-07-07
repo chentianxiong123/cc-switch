@@ -13078,6 +13078,23 @@ mod tests {
     }
 
     #[test]
+    fn fullwidth_question_mark_toggles_the_help_overlay() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+
+        // The full-width Chinese '？' opens help, same as ASCII '?'.
+        let action = app.on_key(key(KeyCode::Char('？')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::Help(_)));
+        assert!(help_text(&app).contains("?   toggle help"));
+
+        // Pressing it again toggles the overlay closed.
+        let action = app.on_key(key(KeyCode::Char('？')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(!app.overlay.is_active(), "help overlay should close");
+    }
+
+    #[test]
     fn context_help_provider_field_tracks_focused_codex_base_url() {
         let _lang = use_test_language(Language::English);
         let mut app = App::new(Some(AppType::Codex));

@@ -565,7 +565,9 @@ impl App {
 
         let key = self.normalize_vim_navigation_key(key);
 
-        if matches!(key.code, KeyCode::Char('?')) && self.help_shortcut_is_available() {
+        if matches!(key.code, KeyCode::Char('?') | KeyCode::Char('？'))
+            && self.help_shortcut_is_available()
+        {
             self.open_help(data);
             return Action::None;
         }

@@ -62,7 +62,7 @@ impl App {
             return None;
         }
         Some(match key.code {
-            KeyCode::Esc | KeyCode::Char('?') => {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('？') => {
                 self.close_overlay();
                 Action::None
             }
