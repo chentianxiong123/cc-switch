@@ -34,7 +34,18 @@ struct OpenCodeMessageData {
     cache_write_tokens: u32,
     cost: f64,
     model_id: String,
-    timestamp_ms: i64,
+    /// 入库时间戳（Unix 秒），在阶段一（解析/收集）就定死：`time.created` 缺失
+    /// 或 <=0 时回退 now()。两阶段批量写库下不推迟到 insert 才取 now()，避免
+    /// 退化输入（缺时间戳）的时间戳后移。
+    created_at: i64,
+}
+
+/// 当前 Unix 时间（秒）。缺失/非法时间戳时的回退来源。
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 struct OpenCodeMessageQueryResult {
@@ -404,6 +415,12 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
         .and_then(|t| t.get("created"))
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
+    // 在阶段一（解析/收集）就定死 created_at（秒）：缺失/<=0 回退 now()。
+    let created_at = if timestamp_ms > 0 {
+        timestamp_ms / 1000
+    } else {
+        now_unix_secs()
+    };
 
     Some(OpenCodeMessageData {
         input_tokens,
@@ -413,7 +430,7 @@ fn parse_message_data(value: &serde_json::Value) -> Option<OpenCodeMessageData> 
         cache_write_tokens,
         cost,
         model_id,
-        timestamp_ms,
+        created_at,
     })
 }
 
@@ -428,14 +445,8 @@ fn insert_opencode_message(
     msg: &OpenCodeMessageData,
     session_id: &str,
 ) -> Result<bool, AppError> {
-    let created_at = if msg.timestamp_ms > 0 {
-        msg.timestamp_ms / 1000
-    } else {
-        SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0)
-    };
+    // created_at 由 parse_message_data 在阶段一定死（见其字段注释），insert 只消费。
+    let created_at = msg.created_at;
 
     // OpenCode 使用 Anthropic 风格：input 是新鲜输入，cache 单独计
     // output 包含 reasoning tokens（按输出计费）
@@ -580,7 +591,22 @@ mod tests {
         assert_eq!(data.cache_write_tokens, 0);
         assert!((data.cost - 0.0023113).abs() < 1e-10);
         assert_eq!(data.model_id, "deepseek-v4-pro");
-        assert_eq!(data.timestamp_ms, 1779755333700);
+        // created_at 在解析阶段定死：time.created(ms) / 1000
+        assert_eq!(data.created_at, 1_779_755_333);
+    }
+
+    #[test]
+    fn test_parse_message_data_missing_timestamp_falls_back_to_now() {
+        // 无 time.created → created_at 在解析阶段回退 now()，落在解析前后窗口内。
+        let before = now_unix_secs();
+        let json: serde_json::Value = serde_json::json!({
+            "role": "assistant",
+            "tokens": { "input": 10, "output": 5 },
+            "modelID": "m"
+        });
+        let data = parse_message_data(&json).unwrap();
+        let after = now_unix_secs();
+        assert!(before <= data.created_at && data.created_at <= after);
     }
 
     #[test]

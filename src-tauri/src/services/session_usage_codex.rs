@@ -71,7 +71,9 @@ struct PendingCodexEntry {
     delta: DeltaTokens,
     model: String,
     session_id: Option<String>,
-    timestamp: Option<String>,
+    /// 在扫描（解析）阶段就定死的入库时间戳（Unix 秒）。缺失/非法 timestamp 的
+    /// now() 回退发生在入队处而非写库阶段，避免两阶段延迟污染退化输入的时间。
+    created_at: i64,
 }
 
 /// 归一化 Codex 模型名
@@ -118,6 +120,27 @@ fn normalize_codex_model(raw: &str) -> String {
     }
 
     name
+}
+
+/// 解析 Codex 事件时间戳为 Unix 秒；缺失/非法时回退当前时刻。
+///
+/// 两阶段扫描（先收集 pending、后批量写库）下，退化输入（缺 timestamp）的
+/// now() 回退必须在**入队**（解析附近）完成，否则会被推迟到写库阶段而使时间戳
+/// 后移。故本函数在扫描回调入队处调用，`insert_codex_session_entry` 只消费定死
+/// 的 created_at，不再自行回退 now()。
+fn resolve_codex_created_at(timestamp: Option<&str>) -> i64 {
+    timestamp
+        .and_then(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.timestamp())
+        })
+        .unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0)
+        })
 }
 
 /// 计算两次累计值之间的 delta
@@ -437,18 +460,17 @@ fn sync_single_codex_file(
                     let request_id =
                         format!("codex_session:{}:{}", session_id_str, state.event_index);
 
-                    // 提取时间戳
-                    let timestamp = value
-                        .get("timestamp")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                    // 在入队处（解析附近）就定死 created_at：缺失/非法 timestamp
+                    // 回退 now()，避免两阶段写库时才取 now() 造成退化输入时间戳后移。
+                    let created_at =
+                        resolve_codex_created_at(value.get("timestamp").and_then(|v| v.as_str()));
 
                     pending.push(PendingCodexEntry {
                         request_id,
                         delta,
                         model: state.current_model.clone(),
                         session_id: state.session_id.clone(),
-                        timestamp,
+                        created_at,
                     });
                 }
                 _ => {}
@@ -479,7 +501,7 @@ fn sync_single_codex_file(
             &entry.delta,
             &entry.model,
             entry.session_id.as_deref(),
-            entry.timestamp.as_deref(),
+            entry.created_at,
         ) {
             Ok(true) => imported += 1,
             Ok(false) => skipped += 1,
@@ -533,21 +555,10 @@ fn insert_codex_session_entry(
     delta: &DeltaTokens,
     model: &str,
     session_id: Option<&str>,
-    timestamp: Option<&str>,
+    created_at: i64,
 ) -> Result<bool, AppError> {
-    let created_at = timestamp
-        .and_then(|ts| {
-            chrono::DateTime::parse_from_rfc3339(ts)
-                .ok()
-                .map(|dt| dt.timestamp())
-        })
-        .unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0)
-        });
-
+    // created_at 由调用方在扫描入队处解析定死（见 resolve_codex_created_at），
+    // 这里只消费固定值，不再回退 now()。
     let dedup_key = DedupKey {
         app_type: "codex",
         model,
@@ -689,6 +700,60 @@ mod tests {
         assert_eq!((input, output), (150, 30));
 
         Ok(())
+    }
+
+    /// created_at 的确定性来源固化：token_count 行带显式 timestamp 时，入库
+    /// created_at 必须等于解析出的时间戳（在扫描入队处定死），与写库时刻无关。
+    /// 这是修复"两阶段延迟使退化输入时间戳后移"的可测形式——created_at 的来源是
+    /// 解析出的时间戳（now() 无法 mock，故退化输入改由下方 helper 单测覆盖）。
+    #[test]
+    fn test_codex_created_at_from_parsed_timestamp() -> Result<(), AppError> {
+        let meta = r#"{"type":"session_meta","payload":{"session_id":"sess-ts"}}"#;
+        let turn = r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#;
+        let event = r#"{"type":"event_msg","timestamp":"2026-01-02T03:04:05Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":50}}}}"#;
+
+        let db = Database::memory()?;
+        let store = ScanCacheStore::in_memory()?;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("rollout.jsonl");
+        fs::write(&path, format!("{meta}\n{turn}\n{event}\n")).expect("write");
+
+        let mut cache = PricingCache::new();
+        let (imported, _) = sync_single_codex_file(&db, &path, 1, &mut cache, Some(&store))?;
+        assert_eq!(imported, 1);
+
+        let expected = resolve_codex_created_at(Some("2026-01-02T03:04:05Z"));
+        let conn = lock_conn!(db.conn);
+        let created_at: i64 = conn.query_row(
+            "SELECT created_at FROM proxy_request_logs WHERE request_id = 'codex_session:sess-ts:1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(created_at, expected);
+        Ok(())
+    }
+
+    /// 缺失/非法 timestamp 回退 now()，合法 rfc3339 走确定性解析。回退发生在入队
+    /// 处（本 helper 被扫描回调调用），写库阶段不再取 now()。
+    #[test]
+    fn test_resolve_codex_created_at_fallback_and_parse() {
+        // 合法 rfc3339 → 精确秒（00:16:45 = 1005s）
+        assert_eq!(resolve_codex_created_at(Some("1970-01-01T00:16:45Z")), 1005);
+
+        // 缺失 → 回退当前时刻，落在调用前后窗口内
+        let before = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let got = resolve_codex_created_at(None);
+        let after = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(before <= got && got <= after);
+
+        // 非法字符串 → 同样回退 now()
+        assert!(resolve_codex_created_at(Some("not-a-timestamp")) >= before);
     }
 
     #[test]
@@ -845,7 +910,7 @@ mod tests {
                 &delta,
                 "gpt-5.4",
                 Some("session-1"),
-                Some("1970-01-01T00:16:45Z"),
+                resolve_codex_created_at(Some("1970-01-01T00:16:45Z")),
             )?
         };
         assert!(!inserted);
