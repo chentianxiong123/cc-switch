@@ -112,12 +112,17 @@ pub fn strip_icon(label: &str) -> &str {
     strip_leading_emoji(label)
 }
 
-/// Icon-mode-agnostic version of [`strip_icon`]: always removes a leading
-/// emoji + its trailing space. Kept separate so callers that already resolved
-/// the mode (and the tests) don't re-read the environment.
+/// Icon-mode-agnostic version of [`strip_icon`]: removes a leading emoji and
+/// its trailing space, tolerating any leading indent spaces (e.g. the centred
+/// home title `"    🎯 CC-Switch …"`). Kept separate so callers that already
+/// resolved the mode (and the tests) don't re-read the environment.
 pub fn strip_leading_emoji(label: &str) -> &str {
-    match label.chars().next() {
-        Some(c) if is_emoji(c) => label.split_once(' ').map(|(_, rest)| rest).unwrap_or(label),
+    let trimmed = label.trim_start_matches(' ');
+    match trimmed.chars().next() {
+        Some(c) if is_emoji(c) => trimmed
+            .split_once(' ')
+            .map(|(_, rest)| rest)
+            .unwrap_or(label),
         _ => label,
     }
 }
@@ -231,9 +236,15 @@ mod tests {
             strip_leading_emoji("🛠️ MCP Server Management"),
             "MCP Server Management"
         );
-        // No emoji prefix → unchanged, even for CJK-leading strings.
+        // Leading indent spaces before the emoji (the centred home title).
+        assert_eq!(
+            strip_leading_emoji("    🎯 CC-Switch 交互模式"),
+            "CC-Switch 交互模式"
+        );
+        // No emoji prefix → unchanged, even with a leading indent or CJK text.
         assert_eq!(strip_leading_emoji("供应商管理"), "供应商管理");
         assert_eq!(strip_leading_emoji("Custom Provider"), "Custom Provider");
+        assert_eq!(strip_leading_emoji("  Plain Title"), "  Plain Title");
     }
 
     #[test]

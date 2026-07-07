@@ -74,7 +74,10 @@ fn render_session_list(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(session_pane_border_style(app, SessionsPane::List, theme))
-        .title(format!(" {} ", texts::menu_manage_sessions()));
+        .title(format!(
+            " {} ",
+            icons::strip_icon(texts::menu_manage_sessions())
+        ));
     frame.render_widget(block.clone(), area);
     let inner = block.inner(area);
 

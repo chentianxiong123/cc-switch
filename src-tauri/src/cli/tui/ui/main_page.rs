@@ -254,7 +254,7 @@ pub(super) fn render_main(
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
         .border_style(pane_border_style(app, Focus::Content, theme))
-        .title(format!(" {} ", texts::welcome_title()));
+        .title(format!(" {} ", icons::strip_icon(texts::welcome_title())));
     frame.render_widget(block.clone(), area);
 
     let inner = block.inner(area);

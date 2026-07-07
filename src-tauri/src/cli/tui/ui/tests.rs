@@ -4277,20 +4277,29 @@ fn nav_drops_emoji_icons_in_ascii_mode() {
     let data = minimal_data(&app.app_type);
 
     let _emoji = EnvGuard::set("CC_SWITCH_ICONS", "emoji");
-    let emoji_nav = all_text(&render(&app, &data));
+    let emoji_view = all_text(&render(&app, &data));
     assert!(
-        emoji_nav.contains('🔑'),
-        "emoji mode should render the nav provider icon: {emoji_nav}"
+        emoji_view.contains('🔑'),
+        "emoji mode should render the nav provider icon: {emoji_view}"
+    );
+    assert!(
+        emoji_view.contains('🎯'),
+        "emoji mode should render the home title icon: {emoji_view}"
     );
 
     let _ascii = EnvGuard::set("CC_SWITCH_ICONS", "ascii");
-    let ascii_nav = all_text(&render(&app, &data));
+    let ascii_view = all_text(&render(&app, &data));
     assert!(
-        !ascii_nav.contains('🔑'),
-        "ascii mode should drop the nav emoji: {ascii_nav}"
+        !ascii_view.contains('🔑'),
+        "ascii mode should drop the nav emoji: {ascii_view}"
+    );
+    assert!(
+        !ascii_view.contains('🎯'),
+        "ascii mode should drop the home title emoji: {ascii_view}"
     );
     // The label text still renders — only the decorative glyph is gone.
-    assert!(ascii_nav.contains("Providers"), "{ascii_nav}");
+    assert!(ascii_view.contains("Providers"), "{ascii_view}");
+    assert!(ascii_view.contains("CC-Switch"), "{ascii_view}");
 }
 
 #[test]
