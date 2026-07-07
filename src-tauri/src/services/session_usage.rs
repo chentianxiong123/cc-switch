@@ -13,14 +13,15 @@ use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::proxy::usage::calculator::{CostCalculator, ModelPricing};
 use crate::proxy::usage::parser::TokenUsage;
+use crate::services::session_usage_driver::{save_resume_hint, scan_jsonl_incremental};
 use crate::services::usage_stats::{
     effective_usage_log_filter, find_model_pricing, should_skip_session_insert, DedupKey,
 };
+use crate::session_manager::scan_cache_store::ScanCacheStore;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -279,10 +280,20 @@ pub fn sync_claude_session_logs(db: &Database) -> Result<SessionSyncResult, AppE
     // 本次同步周期共享的定价缓存，避免每条消息重复查 model_pricing 表。
     let mut pricing_cache = PricingCache::new();
 
+    // sidecar 字节续传提示：打不开时优雅降级为行 offset 路径。
+    let resume_store = ScanCacheStore::open().ok();
+
     for (file_path, file_mtime) in &jsonl_files {
         result.files_scanned += 1;
 
-        match sync_single_file(db, file_path, *file_mtime, &sync_states, &mut pricing_cache) {
+        match sync_single_file(
+            db,
+            file_path,
+            *file_mtime,
+            &sync_states,
+            &mut pricing_cache,
+            resume_store.as_ref(),
+        ) {
             Ok((imported, skipped)) => {
                 result.imported += imported;
                 result.skipped += skipped;
@@ -368,134 +379,119 @@ fn push_jsonl_file(files: &mut Vec<(PathBuf, i64)>, path: PathBuf) {
     files.push((path, mtime));
 }
 
+/// Claude 的驱动状态机：只需跨行携带 session id（序列化进 sidecar 提示）。
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaudeResumeState {
+    session_id: Option<String>,
+}
+
 /// 同步单个 JSONL 文件，返回 (imported, skipped)
 ///
-/// `file_mtime` 为 walk 阶段取得的 mtime 纳秒值；>0 时直接复用避免二次 stat，
-/// 为 0（walk 未能取到）时回退到一次 metadata 读取，保留“元数据不可读即报错”语义。
+/// 文件读取走通用增量驱动（`session_usage_driver`）：mtime 跳过、sidecar
+/// 字节续传、行 offset 回退都由驱动处理；本函数只负责 Claude 行解析与
+/// 写库语义。
 fn sync_single_file(
     db: &Database,
     file_path: &Path,
     file_mtime: i64,
     sync_states: &HashMap<String, (i64, i64)>,
     pricing_cache: &mut PricingCache,
+    resume: Option<&ScanCacheStore>,
 ) -> Result<(u32, u32), AppError> {
     let file_path_str = file_path.to_string_lossy().to_string();
-
-    // mtime：优先使用 walk 阶段的值，回退到一次 metadata 读取
-    let file_modified = if file_mtime > 0 {
-        file_mtime
-    } else {
-        let metadata = fs::metadata(file_path)
-            .map_err(|e| AppError::Config(format!("无法读取文件元数据: {e}")))?;
-        metadata_modified_nanos(&metadata)
-    };
 
     // 检查同步状态（从预加载的快照读取，避免每个文件一次 DB 查询）
     let (last_modified, last_offset) = sync_states.get(&file_path_str).copied().unwrap_or((0, 0));
 
-    // 文件未变化则跳过
-    if file_modified <= last_modified {
-        return Ok((0, 0));
-    }
-
-    // 从上次偏移位置开始增量解析
-    let file =
-        fs::File::open(file_path).map_err(|e| AppError::Config(format!("无法打开文件: {e}")))?;
-    let reader = BufReader::new(file);
-
-    let mut line_offset: i64 = 0;
     let mut messages: HashMap<String, ParsedAssistantUsage> = HashMap::new();
-    let mut current_session_id: Option<String> = None;
 
-    for line_result in reader.lines() {
-        line_offset += 1;
-
-        // 跳过已处理的行
-        if line_offset <= last_offset {
-            continue;
-        }
-
-        let line = match line_result {
-            Ok(l) => l,
-            Err(_) => continue, // 容忍不完整的最后一行
-        };
-
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        // 预过滤：session id 已确定且该行不含 assistant 标记时，直接跳过不解析，
-        // 避免为多兆字节的 tool_result 行构建结构。session id 未确定前的行仍需
-        // 解析（首行通常携带 sessionId），语义与旧逐行 Value 解析一致。
-        if current_session_id.is_some() && !line.contains("\"assistant\"") {
-            continue;
-        }
-
-        let parsed: NarrowClaudeLine = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        // 提取 session ID (从 system 或首条消息)
-        if current_session_id.is_none() {
-            if let Some(sid) = parsed.session_id.as_deref() {
-                current_session_id = Some(sid.to_string());
+    let outcome = scan_jsonl_incremental(
+        file_path,
+        file_mtime,
+        last_modified,
+        last_offset,
+        resume,
+        || ClaudeResumeState { session_id: None },
+        |state, line, is_new| {
+            // Claude 无需重放历史行重建状态（session id 存在提示里），
+            // 回退路径的旧行直接跳过。
+            if !is_new {
+                return;
             }
-        }
 
-        // 只处理 assistant 类型的消息
-        if parsed.kind.as_deref() != Some("assistant") {
-            continue;
-        }
+            // 预过滤：session id 已确定且该行不含 assistant 标记时，直接跳过
+            // 不解析，避免为多兆字节的 tool_result 行构建结构。session id 未
+            // 确定前的行仍需解析（首行通常携带 sessionId）。
+            if state.session_id.is_some() && !line.contains("\"assistant\"") {
+                return;
+            }
 
-        let message = match parsed.message {
-            Some(m) => m,
-            None => continue,
-        };
+            let parsed: NarrowClaudeLine = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
 
-        let msg_id = match message.id {
-            Some(id) => id,
-            None => continue,
-        };
-
-        let usage = match message.usage {
-            Some(u) => u,
-            None => continue,
-        };
-
-        let parsed_usage = ParsedAssistantUsage {
-            message_id: msg_id.clone(),
-            model: message.model.unwrap_or_else(|| "unknown".to_string()),
-            input_tokens: usage.input_tokens.unwrap_or(0) as u32,
-            output_tokens: usage.output_tokens.unwrap_or(0) as u32,
-            cache_read_tokens: usage.cache_read_input_tokens.unwrap_or(0) as u32,
-            cache_creation_tokens: usage.cache_creation_input_tokens.unwrap_or(0) as u32,
-            stop_reason: message.stop_reason,
-            timestamp: parsed.timestamp,
-            session_id: current_session_id.clone(),
-        };
-
-        // 按 message.id 去重：优先保留有 stop_reason 的条目，否则保留最新的
-        let should_replace = match messages.get(&msg_id) {
-            None => true,
-            Some(existing) => {
-                // 新条目有 stop_reason 而旧条目没有 → 替换
-                if parsed_usage.stop_reason.is_some() && existing.stop_reason.is_none() {
-                    true
-                }
-                // 两个都有或都没有 stop_reason → 取 output_tokens 更大的
-                else if parsed_usage.stop_reason.is_some() == existing.stop_reason.is_some() {
-                    parsed_usage.output_tokens > existing.output_tokens
-                } else {
-                    false
+            // 提取 session ID (从 system 或首条消息)
+            if state.session_id.is_none() {
+                if let Some(sid) = parsed.session_id.as_deref() {
+                    state.session_id = Some(sid.to_string());
                 }
             }
-        };
 
-        if should_replace {
-            messages.insert(msg_id, parsed_usage);
-        }
-    }
+            // 只处理 assistant 类型的消息
+            if parsed.kind.as_deref() != Some("assistant") {
+                return;
+            }
+
+            let Some(message) = parsed.message else {
+                return;
+            };
+            let Some(msg_id) = message.id else {
+                return;
+            };
+            let Some(usage) = message.usage else {
+                return;
+            };
+
+            let parsed_usage = ParsedAssistantUsage {
+                message_id: msg_id.clone(),
+                model: message.model.unwrap_or_else(|| "unknown".to_string()),
+                input_tokens: usage.input_tokens.unwrap_or(0) as u32,
+                output_tokens: usage.output_tokens.unwrap_or(0) as u32,
+                cache_read_tokens: usage.cache_read_input_tokens.unwrap_or(0) as u32,
+                cache_creation_tokens: usage.cache_creation_input_tokens.unwrap_or(0) as u32,
+                stop_reason: message.stop_reason,
+                timestamp: parsed.timestamp,
+                session_id: state.session_id.clone(),
+            };
+
+            // 按 message.id 去重：优先保留有 stop_reason 的条目，否则保留最新的
+            let should_replace = match messages.get(&msg_id) {
+                None => true,
+                Some(existing) => {
+                    // 新条目有 stop_reason 而旧条目没有 → 替换
+                    if parsed_usage.stop_reason.is_some() && existing.stop_reason.is_none() {
+                        true
+                    }
+                    // 两个都有或都没有 stop_reason → 取 output_tokens 更大的
+                    else if parsed_usage.stop_reason.is_some() == existing.stop_reason.is_some() {
+                        parsed_usage.output_tokens > existing.output_tokens
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if should_replace {
+                messages.insert(msg_id, parsed_usage);
+            }
+        },
+    )?;
+
+    // 文件未变化（mtime 跳过）
+    let Some(outcome) = outcome else {
+        return Ok((0, 0));
+    };
 
     // 写入数据库：整文件在一个事务内完成 INSERT / 去重查询 / 同步状态更新，
     // 超大文件每 SESSION_LOG_COMMIT_BATCH 行分段提交，避免逐行 fsync。
@@ -546,10 +542,18 @@ fn sync_single_file(
     }
 
     // 在同一事务内更新同步状态后统一提交
-    update_sync_state_conn(&tx, &file_path_str, file_modified, line_offset)?;
+    update_sync_state_conn(
+        &tx,
+        &file_path_str,
+        outcome.file_modified,
+        outcome.line_offset,
+    )?;
     tx.commit()
         .map_err(|e| AppError::Database(format!("提交事务失败: {e}")))?;
     drop(guard);
+
+    // 主库进度提交成功后，把字节位置与状态写回 sidecar（尽力而为）
+    save_resume_hint(resume, &file_path_str, &outcome);
 
     // 每个文件若有新插入行，只通知一次（旧实现为每行一次）
     if imported > 0 {
@@ -851,6 +855,48 @@ pub(crate) fn delete_session_logs_covered_by_proxy_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_manager::scan_cache_store::ScanCacheStore;
+
+    /// 字节续传判别测试：sync1 后把头部第一个换行改成空格（总字节数不变、
+    /// 行数少一），再追加新消息并 bump mtime。行式回退路径会因行号整体前移把
+    /// 新行误跳过（对照组导入 0 条）；字节续传路径 seek 越过被改动的头部，
+    /// 恰好只读到新增行（实验组导入 1 条）。
+    #[test]
+    fn test_byte_resume_survives_head_line_shift() -> Result<(), AppError> {
+        let m1 = r#"{"type":"assistant","message":{"id":"m1","model":"claude-x","usage":{"input_tokens":10,"output_tokens":100},"stop_reason":"end_turn"},"timestamp":"2026-01-01T00:00:00Z","sessionId":"s1"}"#;
+        let m2 = r#"{"type":"assistant","message":{"id":"m2","model":"claude-x","usage":{"input_tokens":11,"output_tokens":200},"stop_reason":"end_turn"},"timestamp":"2026-01-01T00:00:01Z","sessionId":"s1"}"#;
+        let m3 = r#"{"type":"assistant","message":{"id":"m3","model":"claude-x","usage":{"input_tokens":12,"output_tokens":300},"stop_reason":"end_turn"},"timestamp":"2026-01-01T00:00:02Z","sessionId":"s1"}"#;
+
+        let run = |resume: Option<&ScanCacheStore>| -> Result<(u32, u32), AppError> {
+            let db = Database::memory()?;
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let path = write_temp_jsonl(tmp.path(), "session.jsonl", &format!("{m1}\n{m2}\n"));
+            let path_str = path.to_string_lossy().to_string();
+            let mut cache = PricingCache::new();
+
+            let (imported, _) =
+                sync_single_file(&db, &path, 1, &HashMap::new(), &mut cache, resume)?;
+            assert_eq!(imported, 2);
+
+            // 头部换行 → 空格（字节数不变，行边界移位），再追加 m3
+            let content = fs::read_to_string(&path).expect("read back");
+            let shifted = content.replacen('\n', " ", 1) + m3 + "\n";
+            fs::write(&path, shifted).expect("rewrite");
+
+            let mut states = HashMap::new();
+            states.insert(path_str, get_sync_state(&db, &path.to_string_lossy())?);
+            sync_single_file(&db, &path, 2, &states, &mut cache, resume)
+        };
+
+        // 对照组（无续传提示）：行号前移导致 m3 被误跳过——这正是字节续传要修的
+        assert_eq!(run(None)?, (0, 0));
+
+        // 实验组（字节续传）：seek 越过头部，精确导入 m3
+        let store = ScanCacheStore::in_memory()?;
+        assert_eq!(run(Some(&store))?, (1, 0));
+
+        Ok(())
+    }
 
     #[test]
     fn test_parse_usage_from_jsonl_line() {
@@ -1085,7 +1131,7 @@ mod tests {
         let mut cache = PricingCache::new();
 
         // 首轮：m1/m2 导入，m3/m4 在插入前被过滤（既不计 imported 也不计 skipped）。
-        let (imported, skipped) = sync_single_file(&db, &path, 1, &states, &mut cache)?;
+        let (imported, skipped) = sync_single_file(&db, &path, 1, &states, &mut cache, None)?;
         assert_eq!((imported, skipped), (2, 0));
 
         {
@@ -1098,7 +1144,7 @@ mod tests {
         }
 
         // 次轮：states 仍为空 → 重新解析，m1/m2 因 request_id 已存在被去重记为 skipped。
-        let (imported2, skipped2) = sync_single_file(&db, &path, 1, &states, &mut cache)?;
+        let (imported2, skipped2) = sync_single_file(&db, &path, 1, &states, &mut cache, None)?;
         assert_eq!((imported2, skipped2), (0, 2));
 
         {
@@ -1141,7 +1187,7 @@ mod tests {
 
         let states: HashMap<String, (i64, i64)> = HashMap::new();
         let mut cache = PricingCache::new();
-        let (imported, skipped) = sync_single_file(&db, &path, 1, &states, &mut cache)?;
+        let (imported, skipped) = sync_single_file(&db, &path, 1, &states, &mut cache, None)?;
         assert_eq!((imported, skipped), (2, 0));
 
         let conn = lock_conn!(db.conn);
