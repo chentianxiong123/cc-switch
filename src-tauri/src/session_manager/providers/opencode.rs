@@ -71,10 +71,12 @@ pub(crate) fn scan_sessions_cached(store: &ScanCacheStore, force: bool) -> Vec<S
 ///
 /// 改用 `parse_session` 的构造不变量：**有显式 title 时 `summary == title`
 /// （同一字符串 clone）；无显式 title 时 title 来自目录名、summary 来自 part
-/// 文本（或 None），二者不同源**。故 `summary == title` 恰好识别"无 part 文件
-/// 依赖"的会话——多数会话（有显式 title）可缓存，其余每轮重新解析，代价小且
-/// 保证正确。此谓词与 `parse_session` 的 summary 构造强绑定：改动那里必须同步
-/// 审视这里（不变量已由本文件单元测试固化）。
+/// 文本，且 `parse_session` 会把恰好等于 title 的派生 summary 丢弃为 None**。
+/// 因此 `summary == Some(title)` **当且仅当**显式 title——不再依赖"两者不同源
+/// 必不相等"的概率论证，而是由构造严格保证（巧合窗口已在 `parse_session` 消除）。
+/// 故本谓词恰好识别"无 part 文件依赖"的会话——多数会话（有显式 title）可缓存，
+/// 其余每轮重新解析，代价小且保证正确。此谓词与 `parse_session` 的 summary 构造
+/// 强绑定：改动那里必须同步审视这里（不变量已由本文件单元测试固化）。
 fn is_cacheable(meta: &SessionMeta) -> bool {
     meta.title.is_some() && meta.summary == meta.title
 }
@@ -687,14 +689,21 @@ fn parse_session(storage: &Path, path: &Path) -> Option<SessionMeta> {
 
     // 契约（scan_sessions_cached 的 cacheable 谓词依赖此不变量）：
     //   有显式 title 时 summary == display_title（== title，同一字符串 clone），
-    //   即 `summary == title` 意味着"无 part 文件依赖"，可安全缓存；
-    //   无显式 title 时 title 来自目录名、summary 来自 part 文本（或 None），
-    //   二者不同源、必不相等，谓词判定为不可缓存、每轮重解析。
+    //   即 `summary == Some(title)` 意味着"无 part 文件依赖"，可安全缓存；
+    //   无显式 title 时 title 来自目录名、summary 来自 part 文本。为从**构造上**
+    //   消除巧合窗口（part 文本恰好等于目录 basename 回填的 title 时会被误判可
+    //   缓存），此分支若派生 summary 等于 display_title 则丢弃为 None——与 title
+    //   相同的 summary 是冗余展示信息，丢弃无损。由此保证 `summary == Some(title)`
+    //   **当且仅当**显式 title 恒成立（而非概率成立）。
     // 改动此处逻辑必须同步审视 scan_sessions_cached 的 cacheable 谓词。
     let summary = if has_title {
         display_title.clone()
     } else {
-        get_first_user_summary(storage, &session_id)
+        match get_first_user_summary(storage, &session_id) {
+            // 与目录名回填的 title 相同 → 冗余，置 None 以消除巧合窗口
+            Some(s) if Some(&s) == display_title.as_ref() => None,
+            other => other,
+        }
     };
 
     Some(SessionMeta {
@@ -1304,6 +1313,57 @@ mod tests {
         assert!(
             !is_cacheable(&meta),
             "summary 派生自 part 文件的会话不可缓存"
+        );
+    }
+
+    /// 构造上消除巧合窗口：无显式 title、目录 basename 与首条 user part 文本恰好
+    /// 相同。parse_session 应把冗余的 summary 丢弃为 None（无损），is_cacheable
+    /// 判定为不可缓存——避免"summary 派生自 part 却因巧合等于 title"被误缓存。
+    #[test]
+    fn parse_session_without_title_drops_summary_equal_to_title_and_is_uncacheable() {
+        let temp = tempdir().expect("tempdir");
+        let storage = temp.path();
+        let session_id = "ses_coincide";
+        let msg_id = "msg_1";
+
+        let session_dir = storage.join("session").join("proj");
+        let message_dir = storage.join("message").join(session_id);
+        let part_dir = storage.join("part").join(msg_id);
+        std::fs::create_dir_all(&session_dir).expect("create session dir");
+        std::fs::create_dir_all(&message_dir).expect("create message dir");
+        std::fs::create_dir_all(&part_dir).expect("create part dir");
+
+        // 无 title，directory basename 为 "my-project"。
+        let session_file = session_dir.join(format!("{session_id}.json"));
+        std::fs::write(
+            &session_file,
+            format!(
+                r#"{{"id":"{session_id}","directory":"/tmp/my-project","time":{{"created":1,"updated":2}}}}"#
+            ),
+        )
+        .expect("write session");
+
+        // 首条 user 消息的 part 文本恰好等于目录 basename "my-project"（巧合）。
+        std::fs::write(
+            message_dir.join(format!("{msg_id}.json")),
+            format!(
+                r#"{{"id":"{msg_id}","sessionID":"{session_id}","role":"user","time":{{"created":10}}}}"#
+            ),
+        )
+        .expect("write message");
+        std::fs::write(
+            part_dir.join("prt_1.json"),
+            r#"{"id":"prt_1","messageID":"msg_1","type":"text","text":"my-project"}"#,
+        )
+        .expect("write part");
+
+        let meta = parse_session(storage, &session_file).expect("parse session");
+        assert_eq!(meta.title.as_deref(), Some("my-project"));
+        // 巧合命中：派生 summary 等于 title → 丢弃为 None。
+        assert_eq!(meta.summary, None);
+        assert!(
+            !is_cacheable(&meta),
+            "无显式 title 的会话不可缓存（即便 summary 恰好等于 title）"
         );
     }
 }
