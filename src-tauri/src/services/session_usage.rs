@@ -711,9 +711,20 @@ pub(crate) fn update_sync_state_conn(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
+    // 单调更新：并发同步（TUI/daemon/proxy/CLI 可能同时运行）中较晚提交的
+    // 旧快照不得把进度倒退回去。文件系统 mtime 粒度有限，同一 tick 内两个
+    // 快照的 mtime 可能相等，因此按 (mtime, line_offset) 字典序判定：
+    // mtime 更新才整体覆盖；mtime 相等时只允许 offset 不回退。
     conn.execute(
-        "INSERT OR REPLACE INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(file_path) DO UPDATE SET
+            last_modified = excluded.last_modified,
+            last_line_offset = excluded.last_line_offset,
+            last_synced_at = excluded.last_synced_at
+         WHERE excluded.last_modified > session_log_sync.last_modified
+            OR (excluded.last_modified = session_log_sync.last_modified
+                AND excluded.last_line_offset >= session_log_sync.last_line_offset)",
         rusqlite::params![file_path, last_modified, last_offset, now],
     )
     .map_err(|e| AppError::Database(format!("更新同步状态失败: {e}")))?;
@@ -1178,6 +1189,38 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(total_cost, "5.000000");
+
+        Ok(())
+    }
+
+    /// 进度写入按 (mtime, offset) 字典序单调：并发同步中较晚提交的旧快照
+    /// 不得把进度倒退回去（mtime 粒度有限，相等时比较 offset）。
+    #[test]
+    fn sync_state_updates_are_monotonic() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        {
+            let conn = lock_conn!(db.conn);
+            update_sync_state_conn(&conn, "/f.jsonl", 5, 120)?;
+            // 同 mtime、更小 offset：旧快照，拒绝
+            update_sync_state_conn(&conn, "/f.jsonl", 5, 100)?;
+            // 更旧 mtime：拒绝
+            update_sync_state_conn(&conn, "/f.jsonl", 4, 999)?;
+        }
+        assert_eq!(get_sync_state(&db, "/f.jsonl")?, (5, 120));
+
+        {
+            let conn = lock_conn!(db.conn);
+            // 同 mtime、更大 offset：接受
+            update_sync_state_conn(&conn, "/f.jsonl", 5, 130)?;
+        }
+        assert_eq!(get_sync_state(&db, "/f.jsonl")?, (5, 130));
+
+        {
+            let conn = lock_conn!(db.conn);
+            // 更新的 mtime：整体覆盖（offset 允许变小，如文件重写后重扫）
+            update_sync_state_conn(&conn, "/f.jsonl", 6, 10)?;
+        }
+        assert_eq!(get_sync_state(&db, "/f.jsonl")?, (6, 10));
 
         Ok(())
     }

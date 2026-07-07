@@ -335,7 +335,9 @@ impl ScanCacheStore {
     /// 写入（覆盖）某个文件的字节续传提示。
     pub fn save_sync_resume(&self, hint: &SyncResumeHint) -> Result<(), AppError> {
         let conn = self.lock()?;
-        // 单调更新：并发同步中较晚提交的旧快照不得覆盖较新的提示
+        // 单调更新：并发同步中较晚提交的旧快照不得覆盖较新的提示。
+        // mtime 粒度有限，相等时按 byte_offset 单调判定（与主库进度的
+        // (mtime, offset) 字典序规则一致）。
         conn.execute(
             "INSERT INTO session_sync_resume
                 (file_path, last_modified, last_line_offset, byte_offset, state, tail_hash)
@@ -346,7 +348,9 @@ impl ScanCacheStore {
                 byte_offset = excluded.byte_offset,
                 state = excluded.state,
                 tail_hash = excluded.tail_hash
-             WHERE excluded.last_modified >= session_sync_resume.last_modified",
+             WHERE excluded.last_modified > session_sync_resume.last_modified
+                OR (excluded.last_modified = session_sync_resume.last_modified
+                    AND excluded.byte_offset >= session_sync_resume.byte_offset)",
             rusqlite::params![
                 hint.file_path,
                 hint.last_modified,
@@ -450,6 +454,37 @@ mod tests {
         store.clear_provider("claude").expect("clear");
         assert!(store.load_for_provider("claude").expect("load").is_empty());
         assert_eq!(store.load_for_provider("codex").expect("load").len(), 1);
+    }
+
+    /// 提示写入按 (mtime, byte_offset) 字典序单调，与主库进度规则一致。
+    #[test]
+    fn sync_resume_hints_are_monotonic() {
+        let store = ScanCacheStore::in_memory().expect("open memory store");
+        let hint = |mtime: i64, byte: i64| SyncResumeHint {
+            file_path: "/f.jsonl".to_string(),
+            last_modified: mtime,
+            last_line_offset: byte / 10,
+            byte_offset: byte,
+            state: None,
+            tail_hash: Some(1),
+        };
+
+        store.save_sync_resume(&hint(5, 120)).expect("save");
+        store.save_sync_resume(&hint(5, 100)).expect("stale byte");
+        store.save_sync_resume(&hint(4, 999)).expect("stale mtime");
+        let loaded = store
+            .load_sync_resume("/f.jsonl")
+            .expect("load")
+            .expect("hint");
+        assert_eq!((loaded.last_modified, loaded.byte_offset), (5, 120));
+
+        store.save_sync_resume(&hint(5, 130)).expect("newer byte");
+        store.save_sync_resume(&hint(6, 10)).expect("newer mtime");
+        let loaded = store
+            .load_sync_resume("/f.jsonl")
+            .expect("load")
+            .expect("hint");
+        assert_eq!((loaded.last_modified, loaded.byte_offset), (6, 10));
     }
 
     #[test]
