@@ -273,15 +273,28 @@ where
         on_line(&mut state, line, is_new);
     }
 
+    // 是否见到了不完整尾行（快照在遇到它时已固化）
+    let saw_incomplete_tail = resume_state_json.is_some();
+
     // 无不完整尾行时，边界快照就是最终状态
     if resume_state_json.is_none() {
         resume_state_json = serde_json::to_string(&state).ok();
     }
 
+    // 见到不完整尾行时把记录的 mtime 回退 1ns：若写入方在同一 mtime tick 内
+    // 补全了该行且文件此后不再变化，单纯记录当前 mtime 会让下一轮
+    // `file_modified <= last_modified` 直接跳过、该行永久漏导。回退 1ns 保证
+    // 下一轮必然复查（借助提示从边界 seek，只重读尾部，代价极小）。
+    let recorded_modified = if saw_incomplete_tail {
+        file_modified - 1
+    } else {
+        file_modified
+    };
+
     Ok(Some(JsonlScanOutcome {
         line_offset: committed_line_offset,
         byte_pos: committed_byte_pos,
-        file_modified,
+        file_modified: recorded_modified,
         resume_state_json,
     }))
 }
@@ -424,9 +437,11 @@ mod tests {
             first.seen,
             vec![("l1".to_string(), true), ("l2".to_string(), true)]
         );
-        // ……但持久化进度停在换行边界
+        // ……但持久化进度停在换行边界，且记录的 mtime 回退 1ns，
+        // 保证尾行在同一 mtime tick 内补全时下一轮仍会复查
         assert_eq!(first.out().line_offset, 1);
         assert_eq!(first.out().byte_pos, 3);
+        assert_eq!(first.out().file_modified, 999);
         save_resume_hint(Some(&store), &path.to_string_lossy(), first.out());
 
         // 半行被补全并追加新行（append-only，前缀字节不变）
