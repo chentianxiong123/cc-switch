@@ -308,6 +308,28 @@ impl ScanCacheStore {
         Ok(())
     }
 
+    /// 按 provider + session_id 删除缓存行（兜底 opencode 等 source_path ≠
+    /// 缓存键的 provider）。
+    ///
+    /// 缓存主键是 session 文件的绝对路径（walk 时的 `target.path`），而 opencode
+    /// 的 `meta.source_path` 是 message 目录，二者不同——按路径删
+    /// （[`delete_paths`](Self::delete_paths)）对 opencode 是 no-op。这里改用
+    /// meta JSON 里的 `sessionId` 兜底：`SessionMeta` serde 为 camelCase，
+    /// `serde_json::to_string` 产出无空格的紧凑 JSON，其中恰为
+    /// `"sessionId":"<session_id>"`。session_id 来自内部数据、不含通配符，但仍
+    /// 对 LIKE 的 `%`/`_`/`\` 做转义以稳妥（配合 `ESCAPE '\'`）。
+    pub fn delete_rows_by_session(&self, provider: &str, session_id: &str) -> Result<(), AppError> {
+        let pattern = format!("%\"sessionId\":\"{}\"%", escape_like(session_id));
+        let conn = self.lock()?;
+        conn.execute(
+            "DELETE FROM session_scan_cache
+             WHERE provider = ?1 AND meta LIKE ?2 ESCAPE '\\'",
+            rusqlite::params![provider, pattern],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     /// 清空某个 provider 的全部缓存行。
     #[allow(dead_code)]
     pub fn clear_provider(&self, provider: &str) -> Result<(), AppError> {
@@ -389,6 +411,19 @@ impl ScanCacheStore {
     }
 }
 
+/// 转义 LIKE 模式中的通配符（`\`/`%`/`_`），配合 `ESCAPE '\'` 使用，使字面量
+/// 精确匹配、不被当作通配符。
+fn escape_like(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        if matches!(ch, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,6 +498,33 @@ mod tests {
             .load_meta_json(None, SCAN_CACHE_VERSION)
             .expect("load all");
         assert_eq!(all.len(), 2);
+    }
+
+    /// 按 sessionId 删除只影响目标行；LIKE 通配符（`_`）经转义后按字面量匹配，
+    /// 不会误删 sessionId 仅相差一字符的行。
+    #[test]
+    fn delete_rows_by_session_removes_only_matching_session_id() {
+        let store = ScanCacheStore::in_memory().expect("open memory store");
+        // entry() 的 meta_json 形如 {"providerId":"<p>","sessionId":"<path>"}，
+        // 这里用 file_path 值充当 sessionId。ses_a 与 sesXa 仅一字符之差，若不
+        // 转义 `_`，删 ses_a 会把 sesXa 一并误删。
+        store
+            .upsert_batch(&[
+                entry("ses_a", "opencode", 1, 10, SCAN_CACHE_VERSION),
+                entry("sesXa", "opencode", 2, 20, SCAN_CACHE_VERSION),
+            ])
+            .expect("upsert");
+
+        store
+            .delete_rows_by_session("opencode", "ses_a")
+            .expect("delete by session");
+
+        let rows = store.load_for_provider("opencode").expect("load");
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows.contains_key("sesXa"),
+            "`_` 经转义按字面量匹配，sesXa 应保留"
+        );
     }
 
     #[test]
