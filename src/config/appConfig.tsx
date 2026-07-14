@@ -5,6 +5,7 @@ import {
   CodexIcon,
   GeminiIcon,
   OpenClawIcon,
+  PiIcon,
 } from "@/components/BrandIcons";
 import { ProviderIcon } from "@/components/ProviderIcon";
 
@@ -102,15 +103,8 @@ export const APP_ICON_MAP: Record<AppId, AppConfig> = {
       "bg-violet-500/10 text-violet-700 dark:text-violet-300 hover:bg-violet-500/20 border-0 gap-1.5",
   },
   "pi-agent": {
-    label: "Pi-Agent",
-    icon: (
-      <ProviderIcon
-        icon="pi-agent"
-        name="Pi-Agent"
-        size={14}
-        showFallback={false}
-      />
-    ),
+    label: "Pi",
+    icon: <PiIcon size={14} />,
     activeClass:
       "bg-cyan-500/10 ring-1 ring-cyan-500/20 hover:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400",
     badgeClass:

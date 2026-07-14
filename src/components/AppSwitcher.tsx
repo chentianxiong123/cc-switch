@@ -56,7 +56,7 @@ export function AppSwitcher({
     opencode: "OpenCode",
     openclaw: "OpenClaw",
     hermes: "Hermes",
-    "pi-agent": "Pi-Agent",
+    "pi-agent": "Pi",
   };
 
   // Filter apps based on visibility settings (default all visible)

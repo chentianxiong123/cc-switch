@@ -198,7 +198,7 @@ export interface ProviderFormProps {
 }
 
 export function ProviderForm(props: ProviderFormProps) {
-  if (props.appId === "claude") {
+  if (props.appId === "claude-desktop") {
     return <null {...props} />;
   }
 
