@@ -103,10 +103,10 @@ interface ClaudeFormFieldsProps {
   onCodexFastModeChange?: (enabled: boolean) => void;
 
   // Template Values
-  templateValueEntries: Array<[string, TemplateValueConfig]>;
-  templateValues: Record<string, TemplateValueConfig>;
-  templatePresetName: string;
-  onTemplateValueChange: (key: string, value: string) => void;
+  templateValueEntries?: Array<[string, TemplateValueConfig]>;
+  templateValues?: Record<string, TemplateValueConfig>;
+  templatePresetName?: string;
+  onTemplateValueChange?: (key: string, value: string) => void;
 
   // Base URL
   shouldShowSpeedTest: boolean;
@@ -629,7 +629,7 @@ export function ClaudeFormFields({
       )}
 
       {/* 模板变量输入 */}
-      {templateValueEntries.length > 0 && (
+      {templateValueEntries && templateValueEntries.length > 0 && (
         <div className="space-y-3">
           <FormLabel>
             {t("providerForm.parameterConfig", {
@@ -648,12 +648,12 @@ export function ClaudeFormFields({
                   type="text"
                   required
                   value={
-                    templateValues[key]?.editorValue ??
+                    templateValues?.[key]?.editorValue ??
                     config.editorValue ??
                     config.defaultValue ??
                     ""
                   }
-                  onChange={(e) => onTemplateValueChange(key, e.target.value)}
+                  onChange={(e) => onTemplateValueChange?.(key, e.target.value)}
                   placeholder={config.placeholder || config.label}
                   autoComplete="off"
                 />
