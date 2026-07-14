@@ -50,10 +50,17 @@ use std::path::PathBuf;
 
 /// 获取 pi-agent 配置目录
 ///
-/// 默认路径: `~/.pi/agent/`
-/// 优先级: PI_CODING_AGENT_DIR 环境变量 > ~/.pi/agent
+/// 解析顺序：
+///   1. CCS 设置 `pi_agent_config_dir`（显式覆盖）
+///   2. `PI_CODING_AGENT_DIR` 环境变量
+///   3. `~/.pi/agent`
 pub fn get_pi_agent_dir() -> PathBuf {
-    // 支持 PI_CODING_AGENT_DIR 环境变量覆盖
+    // 1. 设置覆盖
+    if let Some(override_dir) = crate::settings::get_pi_agent_override_dir() {
+        return override_dir;
+    }
+
+    // 2. PI_CODING_AGENT_DIR 环境变量覆盖
     if let Ok(env_dir) = std::env::var("PI_CODING_AGENT_DIR") {
         let trimmed = env_dir.trim().to_string();
         if !trimmed.is_empty() {
@@ -61,6 +68,7 @@ pub fn get_pi_agent_dir() -> PathBuf {
         }
     }
 
+    // 3. 默认路径
     crate::config::get_home_dir().join(".pi").join("agent")
 }
 
