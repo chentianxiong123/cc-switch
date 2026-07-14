@@ -13,8 +13,8 @@ type PresetEntry = {
 
 interface UseSpeedTestEndpointsProps {
   appId: AppId;
-  selectedPresetId: string | null;
-  presetEntries: PresetEntry[];
+  selectedPresetId?: string | null;
+  presetEntries?: PresetEntry[];
   baseUrl: string;
   codexBaseUrl: string;
   initialData?: {
@@ -76,7 +76,7 @@ export function useSpeedTestEndpoints({
     }
 
     // 3. 预设中的 endpointCandidates
-    if (selectedPresetId && selectedPresetId !== "custom") {
+    if (selectedPresetId && selectedPresetId !== "custom" && presetEntries) {
       const entry = presetEntries.find((item) => item.id === selectedPresetId);
       if (entry) {
         const preset = entry.preset as ProviderPreset & {
@@ -136,7 +136,7 @@ export function useSpeedTestEndpoints({
     }
 
     // 3. 预设中的 endpointCandidates
-    if (selectedPresetId && selectedPresetId !== "custom") {
+    if (selectedPresetId && selectedPresetId !== "custom" && presetEntries) {
       const entry = presetEntries.find((item) => item.id === selectedPresetId);
       if (entry) {
         const preset = entry.preset as CodexProviderPreset;

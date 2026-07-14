@@ -1417,7 +1417,7 @@ function ProviderFormFull({
   };
 
   const shouldShowSpeedTest =
-    category !== "official" && category !== "cloud_provider";
+    category !== "official" && category !== "cloud_provider" && appId !== "pi-agent";
 
   const {
     shouldShowApiKeyLink: shouldShowClaudeApiKeyLink,
