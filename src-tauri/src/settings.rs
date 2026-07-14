@@ -45,7 +45,7 @@ pub struct VisibleApps {
     pub openclaw: bool,
     #[serde(default)]
     pub hermes: bool,
-    #[serde(default)]
+    #[serde(default, rename = "pi-agent", alias = "piAgent")]
     pub pi_agent: bool,
 }
 
