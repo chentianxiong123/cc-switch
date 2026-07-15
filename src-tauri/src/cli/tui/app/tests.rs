@@ -512,6 +512,38 @@ mod tests {
         )
     }
 
+    fn run_runtime_action_with_session_tx(
+        app: &mut App,
+        data: &mut UiData,
+        session_tx: &std::sync::mpsc::Sender<crate::cli::tui::runtime_systems::SessionReq>,
+        action: Action,
+    ) -> Result<(), AppError> {
+        let mut terminal = TuiTerminal::new_for_test().expect("create terminal");
+        let mut proxy_loading = RequestTracker::default();
+        let mut webdav_loading = RequestTracker::default();
+        let mut update_check = RequestTracker::default();
+
+        handle_action(
+            &mut terminal,
+            app,
+            data,
+            None,
+            None,
+            None,
+            None,
+            &mut proxy_loading,
+            None,
+            Some(session_tx),
+            None,
+            &mut webdav_loading,
+            None,
+            &mut update_check,
+            None,
+            None,
+            action,
+        )
+    }
+
     fn openclaw_provider_row(id: &str, name: &str, models: &[(&str, &str)]) -> ProviderRow {
         let settings_config = json!({
             "models": models
@@ -14983,6 +15015,295 @@ mod tests {
     }
 
     #[test]
+    fn session_project_picker_filters_and_applies_an_exact_scope() {
+        let directory = tempfile::tempdir().expect("manifest fixture directory");
+        let store =
+            crate::session_manager::paged_manifest::PagedManifestStore::open_at(directory.path())
+                .expect("manifest fixture store");
+        let mut builder = store
+            .begin_build("claude")
+            .expect("manifest fixture builder");
+        builder
+            .push(session_meta(
+                "claude",
+                "alpha",
+                "Alpha",
+                "/repo/alpha",
+                "/tmp/alpha.jsonl",
+                "claude --resume alpha",
+            ))
+            .expect("alpha row");
+        builder
+            .push(session_meta(
+                "claude",
+                "beta",
+                "Beta",
+                "/repo/beta",
+                "/tmp/beta.jsonl",
+                "claude --resume beta",
+            ))
+            .expect("beta row");
+        let mut unknown = session_meta(
+            "claude",
+            "unknown",
+            "Unknown",
+            "/unused",
+            "/tmp/unknown.jsonl",
+            "claude --resume unknown",
+        );
+        unknown.project_dir = None;
+        builder.push(unknown).expect("unknown project row");
+        let published = builder.publish().expect("publish manifest fixture");
+
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.focus = Focus::Content;
+        let _ = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        assert!(app.sessions.remember_base_manifest(
+            scope_epoch,
+            "claude",
+            published.generation.clone(),
+            published.total_rows,
+            published.reader.clone(),
+        ));
+        let catalog = crate::session_manager::project_scope::aggregate_project_directories(
+            &published.reader,
+            &|| false,
+        )
+        .expect("project catalog");
+        let request_id = app
+            .sessions
+            .start_project_catalog()
+            .expect("catalog request");
+        assert!(app.sessions.finish_project_catalog(
+            request_id,
+            scope_epoch,
+            "claude".to_string(),
+            published.generation,
+            catalog,
+        ));
+        app.overlay = Overlay::SessionProjectPicker(SessionProjectPickerState {
+            input: crate::cli::tui::text_edit::TextInput::new(""),
+            selected_idx: 0,
+            path_scroll: 0,
+            filtered_indices: None,
+            pinned_scope: None,
+            filter_error: None,
+        });
+
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert_eq!(session_project_option_count(&app.sessions, picker), 4);
+        assert!(matches!(
+            session_project_option_at(&app.sessions, picker, 0),
+            Some(SessionProjectOption::All { .. })
+        ));
+        assert!(matches!(
+            session_project_option_at(&app.sessions, picker, 1),
+            Some(SessionProjectOption::Exact { .. })
+        ));
+        assert!(matches!(
+            session_project_option_at(&app.sessions, picker, 2),
+            Some(SessionProjectOption::Exact { .. })
+        ));
+        assert!(matches!(
+            session_project_option_at(&app.sessions, picker, 3),
+            Some(SessionProjectOption::Unknown { .. })
+        ));
+        let unknown_filter = session_project_filter_source(
+            &app.sessions,
+            picker,
+            &texts::tui_sessions_unknown_project().to_lowercase(),
+        )
+        .expect("unknown project filter source");
+        assert!(unknown_filter.fixed_matches.is_empty());
+        assert_eq!(unknown_filter.project_offset, 1);
+        assert_eq!(unknown_filter.trailing_matches, vec![3]);
+        app.sessions.project_scope =
+            crate::session_manager::project_scope::SessionProjectScope::Unknown;
+        assert_eq!(
+            session_project_active_option_index(&app.sessions, picker),
+            3
+        );
+        app.sessions.project_scope =
+            crate::session_manager::project_scope::SessionProjectScope::All;
+
+        let Overlay::SessionProjectPicker(picker) = &mut app.overlay else {
+            panic!("project picker remains open");
+        };
+        picker.selected_idx = 1;
+        assert!(matches!(
+            app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT), &data()),
+            Action::None
+        ));
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert_ne!(picker.path_scroll, 0);
+        assert!(matches!(
+            app.on_key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT), &data()),
+            Action::None
+        ));
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert_eq!(picker.path_scroll, 0);
+        assert!(matches!(
+            app.on_key(KeyEvent::new(KeyCode::End, KeyModifiers::SHIFT), &data()),
+            Action::None
+        ));
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert_eq!(picker.path_scroll, usize::MAX);
+        assert!(matches!(
+            app.on_key(KeyEvent::new(KeyCode::Home, KeyModifiers::SHIFT), &data()),
+            Action::None
+        ));
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert_eq!(picker.path_scroll, 0);
+
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('b')), &data()),
+            Action::SessionsProjectFilter { query } if query == "b"
+        ));
+        let Overlay::SessionProjectPicker(picker) = &app.overlay else {
+            panic!("project picker remains open");
+        };
+        assert!(picker
+            .filtered_indices
+            .as_deref()
+            .is_some_and(<[_]>::is_empty));
+
+        // Project matching is intentionally performed by the sessions worker;
+        // install its raw option index before exercising Enter selection.
+        let Overlay::SessionProjectPicker(picker) = &mut app.overlay else {
+            panic!("project picker remains open");
+        };
+        picker.filtered_indices = Some(vec![2]);
+
+        let action = app.on_key(key(KeyCode::Enter), &data());
+        assert!(matches!(
+            action,
+            Action::SessionsProjectApply {
+                scope: crate::session_manager::project_scope::SessionProjectScope::Exact {
+                    ref display_path,
+                    ..
+                }
+            } if display_path == "/repo/beta"
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn project_picker_help_and_escape_restore_then_cancel_the_picker() {
+        let _lang = use_test_language(Language::English);
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.overlay = Overlay::SessionProjectPicker(SessionProjectPickerState {
+            input: crate::cli::tui::text_edit::TextInput::new("repo"),
+            selected_idx: 0,
+            path_scroll: 0,
+            filtered_indices: Some(Vec::new()),
+            pinned_scope: None,
+            filter_error: None,
+        });
+
+        assert!(matches!(
+            app.on_key(key(KeyCode::Char('?')), &data()),
+            Action::None
+        ));
+        assert!(matches!(app.overlay, Overlay::Help(_)));
+        let help = help_text(&app);
+        assert!(help.contains("h/l are aliases"), "{help}");
+        assert!(help.contains("PgUp/PgDn"), "{help}");
+        assert!(
+            help.contains("Sessions always show the current app"),
+            "{help}"
+        );
+        assert!(matches!(
+            app.pending_overlay,
+            Some(Overlay::SessionProjectPicker(_))
+        ));
+
+        assert!(matches!(
+            app.on_key(key(KeyCode::Esc), &data()),
+            Action::None
+        ));
+        assert!(matches!(app.overlay, Overlay::SessionProjectPicker(_)));
+        assert!(matches!(
+            app.on_key(key(KeyCode::Esc), &data()),
+            Action::SessionsProjectFilterCancel
+        ));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn leaving_sessions_releases_a_cancelled_project_catalog_request() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Sessions;
+        app.sessions.project_catalog_active = Some(7);
+        app.sessions.project_catalog_loading = true;
+        app.pending_project_catalog = true;
+        let mut data = UiData::default();
+
+        run_runtime_action(&mut app, &mut data, Action::SwitchRoute(Route::Main))
+            .expect("leave sessions");
+
+        assert_eq!(app.sessions.project_catalog_active, None);
+        assert!(!app.sessions.project_catalog_loading);
+        assert!(!app.pending_project_catalog);
+    }
+
+    #[test]
+    fn project_scope_query_edit_cancel_preserves_the_replacement_debounce() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.sessions.project_scope =
+            crate::session_manager::project_scope::SessionProjectScope::exact("/repo/alpha")
+                .expect("exact project");
+        app.sessions.deep_search_query = Some("old".to_string());
+        app.sessions.deep_search_pending = Some(("new".to_string(), 0));
+        let mut data = UiData::default();
+
+        run_runtime_action(&mut app, &mut data, Action::SessionsDeepSearchCancel)
+            .expect("cancel superseded search");
+
+        assert_eq!(
+            app.sessions.deep_search_pending.as_ref(),
+            Some(&("new".to_string(), 0))
+        );
+        assert!(app.sessions.deep_search_query.is_none());
+        assert!(app.sessions.deep_search_active.is_none());
+    }
+
+    #[test]
+    fn applying_the_active_project_does_not_cancel_its_inflight_view() {
+        let mut app = App::new(Some(AppType::Claude));
+        let scope =
+            crate::session_manager::project_scope::SessionProjectScope::exact("/repo/alpha")
+                .expect("exact project");
+        app.sessions.project_scope = scope.clone();
+        app.sessions.deep_search_active = Some(17);
+        let mut data = UiData::default();
+        let (session_tx, session_rx) = std::sync::mpsc::channel();
+
+        run_runtime_action_with_session_tx(
+            &mut app,
+            &mut data,
+            &session_tx,
+            Action::SessionsProjectApply { scope },
+        )
+        .expect("apply active project");
+
+        assert_eq!(app.sessions.deep_search_active, Some(17));
+        assert!(session_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn sessions_page_keys_move_selection_by_page_and_clamp() {
         let mut app = App::new(Some(AppType::Claude));
         app.route = Route::Sessions;
@@ -15248,23 +15569,69 @@ mod tests {
     }
 
     #[test]
-    fn sessions_scope_toggle_does_not_discard_completed_state_before_stash() {
+    fn sessions_a_is_unbound_and_keeps_current_app_history() {
         let mut app = app_with_session_page();
         let data = UiData::default();
 
-        app.on_key(key(KeyCode::Char('a')), &data);
-        assert!(app.sessions.show_all_providers);
-        assert!(
-            app.sessions.loaded_once,
-            "the refresh scheduler must still be able to stash completed provider rows"
+        let action = app.on_key(key(KeyCode::Char('a')), &data);
+
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.sessions.provider_id.as_deref(), Some("claude"));
+        let visible = visible_sessions_for_state(
+            &app.filter,
+            &app.app_type,
+            app.sessions.provider_id.as_deref(),
+            &app.sessions.project_scope,
+            &app.sessions.rows,
+            app.sessions.detail_key.as_deref(),
+            app.sessions.messages_loaded,
+            &app.sessions.messages,
+            app.sessions.deep_search_query.as_deref(),
+            &app.sessions.deep_search_results,
+            app.sessions
+                .materialized_view_is_current(app.filter.query_lower().as_deref()),
+            app.sessions.rows_revision,
+            app.sessions.messages_revision,
+            app.sessions.deep_search_seq,
+            &app.sessions.visibility_cache,
+        );
+        assert_eq!(visible.len(), 1);
+        assert_eq!(
+            visible.get(0).map(|row| row.provider_id.as_str()),
+            Some("claude")
+        );
+    }
+
+    #[test]
+    fn sessions_history_with_unverified_rows_is_current_app_only() {
+        let app = app_with_session_page();
+        let rows = vec![
+            session_meta_for_app("claude"),
+            session_meta_for_app("codex"),
+        ];
+
+        let visible = visible_sessions_for_state(
+            &app.filter,
+            &app.app_type,
+            None,
+            &app.sessions.project_scope,
+            &rows,
+            None,
+            false,
+            &[],
+            None,
+            &[],
+            false,
+            0,
+            0,
+            0,
+            &app.sessions.visibility_cache,
         );
 
-        app.sessions.provider_id = Some("all".to_string());
-        app.on_key(key(KeyCode::Esc), &data);
-        assert!(!app.sessions.show_all_providers);
-        assert!(
-            app.sessions.loaded_once,
-            "leaving all-providers must preserve the completed all scope until it is stashed"
+        assert_eq!(visible.len(), 1);
+        assert_eq!(
+            visible.get(0).map(|row| row.provider_id.as_str()),
+            Some("claude")
         );
     }
 
@@ -15937,17 +16304,15 @@ mod tests {
     }
 
     #[test]
-    fn sessions_provider_scope_change_restarts_nonempty_deep_search() {
+    fn sessions_a_does_not_cancel_an_active_search() {
         let mut app = app_with_session_page();
         app.filter.input.set("needle");
+        app.sessions.deep_search_active = Some(7);
 
         let action = app.on_key(key(KeyCode::Char('a')), &UiData::default());
 
-        assert!(app.sessions.show_all_providers);
-        assert!(matches!(
-            action,
-            Action::SessionsDeepSearch { query } if query == "needle"
-        ));
+        assert!(matches!(action, Action::None));
+        assert_eq!(app.sessions.deep_search_active, Some(7));
     }
 
     #[test]

@@ -150,6 +150,15 @@ pub(crate) fn render_overlay(
             error.as_deref(),
             *selected_idx,
         ),
+        Overlay::SessionProjectPicker(picker) => {
+            super::pickers::render_session_project_picker_overlay(
+                frame,
+                app,
+                content_area,
+                theme,
+                picker,
+            )
+        }
         Overlay::OpenClawToolsProfilePicker { selected } => {
             super::pickers::render_openclaw_tools_profile_picker_overlay(
                 frame,

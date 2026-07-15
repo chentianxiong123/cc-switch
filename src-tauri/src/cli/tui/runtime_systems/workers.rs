@@ -29,6 +29,8 @@ use super::types::{
 };
 
 static SESSION_SCAN_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SESSION_PROJECT_CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
+static SESSION_PROJECT_FILTER_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn start_proxy_system() -> Result<ProxySystem, AppError> {
     let (result_tx, result_rx) = mpsc::channel::<ProxyMsg>();
@@ -788,7 +790,7 @@ fn launch_session_messages(job: SessionMessageJob) -> Result<(), String> {
 struct SessionSearchJob {
     request_id: u64,
     scope_epoch: u64,
-    query: String,
+    view: crate::session_manager::project_scope::SessionViewSpec,
     base: crate::cli::tui::app::SessionPageToken,
     base_reader: crate::session_manager::paged_manifest::ManifestReader,
     query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
@@ -804,7 +806,7 @@ fn launch_session_search(job: SessionSearchJob) -> Result<(), String> {
             run_session_search(
                 job.request_id,
                 job.scope_epoch,
-                job.query,
+                job.view,
                 job.base,
                 job.base_reader,
                 job.query_namespace,
@@ -1009,7 +1011,7 @@ fn session_dispatcher_loop_with<S, L, P, R, M>(
             SessionReq::Search {
                 request_id,
                 scope_epoch,
-                query,
+                view,
                 base,
                 base_reader,
                 query_namespace,
@@ -1017,12 +1019,12 @@ fn session_dispatcher_loop_with<S, L, P, R, M>(
                 let generation = search_generation.fetch_add(1, Ordering::AcqRel) + 1;
                 let error_scope = base.scope.clone();
                 let error_base_generation = base.generation.clone();
-                let error_query = query.clone();
+                let error_view = view.clone();
                 let error_namespace = query_namespace.clone();
                 let job = SessionSearchJob {
                     request_id,
                     scope_epoch,
-                    query,
+                    view,
                     base,
                     base_reader,
                     query_namespace,
@@ -1036,7 +1038,7 @@ fn session_dispatcher_loop_with<S, L, P, R, M>(
                         scope_epoch,
                         scope: error_scope,
                         base_generation: error_base_generation,
-                        query: error_query,
+                        view: error_view,
                         query_namespace: error_namespace,
                         result: Err(err),
                     });
@@ -1354,6 +1356,145 @@ fn handle_session_req(req: SessionReq, tx: &mpsc::Sender<SessionMsg>) -> Result<
             }
             Ok(())
         }
+        SessionReq::ProjectCatalog {
+            request_id,
+            scope_epoch,
+            base,
+            base_reader,
+        } => {
+            let catalog_generation =
+                SESSION_PROJECT_CATALOG_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+            let result_tx = tx.clone();
+            let error_tx = tx.clone();
+            let error_scope = base.scope.clone();
+            let error_generation = base.generation.clone();
+            match std::thread::Builder::new()
+                .name("cc-switch-session-projects".to_string())
+                .spawn(move || {
+                    let cancelled = || {
+                        SESSION_PROJECT_CATALOG_GENERATION.load(Ordering::Acquire)
+                            != catalog_generation
+                    };
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if base.source != crate::cli::tui::app::SessionPageSource::Base {
+                            return Err("project catalog source is not a base manifest".to_string());
+                        }
+                        if base_reader.scope() != base.scope
+                            || base_reader.generation() != base.generation
+                        {
+                            return Err(
+                                "project catalog reader does not match its base token".to_string()
+                            );
+                        }
+                        crate::session_manager::project_scope::aggregate_project_directories(
+                            &base_reader,
+                            &cancelled,
+                        )
+                        .map_err(|error| error.to_string())
+                    }))
+                    .unwrap_or_else(|_| Err("project catalog build panicked".to_string()));
+                    if cancelled() {
+                        return;
+                    }
+                    let _ = result_tx.send(SessionMsg::ProjectCatalogBuilt {
+                        request_id,
+                        scope_epoch,
+                        scope: base.scope,
+                        base_generation: base.generation,
+                        result: outcome,
+                    });
+                }) {
+                Ok(_) => Ok(()),
+                Err(error) => error_tx
+                    .send(SessionMsg::ProjectCatalogBuilt {
+                        request_id,
+                        scope_epoch,
+                        scope: error_scope,
+                        base_generation: error_generation,
+                        result: Err(format!(
+                            "failed to spawn session project catalog worker: {error}"
+                        )),
+                    })
+                    .map_err(|_| ()),
+            }
+        }
+        SessionReq::CancelProjectCatalog => {
+            SESSION_PROJECT_CATALOG_GENERATION.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+        SessionReq::ProjectFilter {
+            request_id,
+            scope_epoch,
+            scope,
+            base_generation,
+            query,
+            catalog,
+            project_offset,
+            fixed_matches,
+            trailing_matches,
+        } => {
+            let filter_generation =
+                SESSION_PROJECT_FILTER_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+            let result_tx = tx.clone();
+            let error_tx = tx.clone();
+            let error_scope = scope.clone();
+            let error_base_generation = base_generation.clone();
+            let error_query = query.clone();
+            match std::thread::Builder::new()
+                .name("cc-switch-session-project-filter".to_string())
+                .spawn(move || {
+                    let cancelled = || {
+                        SESSION_PROJECT_FILTER_GENERATION.load(Ordering::Acquire)
+                            != filter_generation
+                    };
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut matches = fixed_matches;
+                        for (index, project) in catalog.projects.iter().enumerate() {
+                            if cancelled() {
+                                return Err("project filter was cancelled".to_string());
+                            }
+                            if crate::session_manager::project_scope::project_path_contains_query(
+                                &project.display_path,
+                                &query,
+                            ) {
+                                matches.push(project_offset.saturating_add(index));
+                            }
+                        }
+                        matches.extend(trailing_matches);
+                        Ok(matches)
+                    }))
+                    .unwrap_or_else(|_| Err("project filter panicked".to_string()));
+                    if cancelled() {
+                        return;
+                    }
+                    let _ = result_tx.send(SessionMsg::ProjectFilterBuilt {
+                        request_id,
+                        scope_epoch,
+                        scope,
+                        base_generation,
+                        query,
+                        result: outcome,
+                    });
+                }) {
+                Ok(_) => Ok(()),
+                Err(error) => error_tx
+                    .send(SessionMsg::ProjectFilterBuilt {
+                        request_id,
+                        scope_epoch,
+                        scope: error_scope,
+                        base_generation: error_base_generation,
+                        query: error_query,
+                        result: Err(format!(
+                            "failed to spawn session project filter worker: {error}"
+                        )),
+                    })
+                    .map_err(|_| ()),
+            }
+        }
+        SessionReq::CancelProjectFilter => {
+            SESSION_PROJECT_FILTER_GENERATION.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
         SessionReq::Delete {
             request_id,
             key,
@@ -1420,7 +1561,7 @@ fn handle_session_req(req: SessionReq, tx: &mpsc::Sender<SessionMsg>) -> Result<
 fn run_session_search(
     request_id: u64,
     scope_epoch: u64,
-    query: String,
+    view: crate::session_manager::project_scope::SessionViewSpec,
     base: crate::cli::tui::app::SessionPageToken,
     base_reader: crate::session_manager::paged_manifest::ManifestReader,
     query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
@@ -1445,9 +1586,9 @@ fn run_session_search(
         let builder = query_store
             .begin_build(&base_reader)
             .map_err(|error| error.to_string())?;
-        let published = crate::session_manager::query_manifest::build_query_manifest(
+        let published = crate::session_manager::query_manifest::build_view_manifest(
             &base_reader,
-            &query,
+            &view,
             builder,
             &is_cancelled,
         )
@@ -1471,7 +1612,7 @@ fn run_session_search(
         scope_epoch,
         scope: base.scope,
         base_generation: base.generation,
-        query,
+        view,
         query_namespace,
         result,
     });
@@ -3470,6 +3611,65 @@ mod tests {
     }
 
     #[test]
+    fn session_project_filter_runs_off_thread_and_returns_raw_option_indices() {
+        let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+        let manifest_store = crate::session_manager::paged_manifest::PagedManifestStore::open_at(
+            manifest_dir.path(),
+        )
+        .expect("manifest fixture store");
+        let mut builder = manifest_store
+            .begin_build("claude")
+            .expect("manifest fixture builder");
+        for (session_id, project_dir) in [("alpha", "/repo/alpha"), ("beta", "/repo/beta")] {
+            builder
+                .push(crate::session_manager::SessionMeta {
+                    provider_id: "claude".to_string(),
+                    session_id: session_id.to_string(),
+                    project_dir: Some(project_dir.to_string()),
+                    source_path: Some(format!("/tmp/{session_id}.jsonl")),
+                    ..crate::session_manager::SessionMeta::default()
+                })
+                .expect("manifest fixture row");
+        }
+        let published = builder.publish().expect("publish fixture");
+        let catalog = crate::session_manager::project_scope::aggregate_project_directories(
+            &published.reader,
+            &|| false,
+        )
+        .expect("project catalog");
+        let (tx, rx) = mpsc::channel();
+
+        handle_session_req(
+            SessionReq::ProjectFilter {
+                request_id: 41,
+                scope_epoch: 7,
+                scope: "claude".to_string(),
+                base_generation: published.generation.clone(),
+                query: "beta".to_string(),
+                catalog: Arc::new(catalog),
+                project_offset: 1,
+                fixed_matches: vec![0],
+                trailing_matches: vec![3],
+            },
+            &tx,
+        )
+        .expect("spawn project filter");
+
+        assert!(matches!(
+            rx.recv_timeout(std::time::Duration::from_secs(1))
+                .expect("project filter result"),
+            SessionMsg::ProjectFilterBuilt {
+                request_id: 41,
+                scope_epoch: 7,
+                scope,
+                query,
+                result: Ok(indices),
+                ..
+            } if scope == "claude" && query == "beta" && indices == vec![0, 2, 3]
+        ));
+    }
+
+    #[test]
     fn session_search_has_an_independent_lane_and_cancel_generation() {
         let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
         let manifest_store = crate::session_manager::paged_manifest::PagedManifestStore::open_at(
@@ -3541,7 +3741,9 @@ mod tests {
             .send(SessionReq::Search {
                 request_id: 1,
                 scope_epoch: 1,
-                query: "needle".to_string(),
+                view: crate::session_manager::project_scope::SessionViewSpec::all_projects(
+                    "needle",
+                ),
                 base: crate::cli::tui::app::SessionPageToken {
                     scope_epoch: 1,
                     view_epoch: 1,

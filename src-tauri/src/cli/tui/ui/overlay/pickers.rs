@@ -7,6 +7,9 @@ use crate::cli::tui::text_edit::TextInput;
 const OPENCLAW_AGENTS_MODEL_PICKER_MAX_VISIBLE_ROWS: usize = 32;
 const OPENCLAW_AGENTS_MODEL_PICKER_MAX_LABEL_BYTES: usize = 4 * 1024;
 const OPENCLAW_AGENTS_MODEL_PICKER_MAX_LABEL_WIDTH: usize = 512;
+const SESSION_PROJECT_PICKER_WIDTH: u16 = 86;
+const SESSION_PROJECT_PICKER_HEIGHT: u16 = 24;
+const SESSION_PROJECT_PICKER_WIDE_MIN_WIDTH: u16 = 64;
 
 pub(super) fn render_claude_model_picker_overlay(
     frame: &mut Frame<'_>,
@@ -940,6 +943,565 @@ pub(super) fn render_model_fetch_picker_overlay(
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
+pub(super) fn render_session_project_picker_overlay(
+    frame: &mut Frame<'_>,
+    app: &App,
+    content_area: Rect,
+    theme: &theme::Theme,
+    picker: &app::SessionProjectPickerState,
+) {
+    let body = overlay_frame(
+        frame,
+        content_area,
+        theme,
+        texts::tui_sessions_project_picker_title(),
+        &[
+            ("↑↓", texts::tui_key_select()),
+            ("Shift+←→", texts::tui_key_scroll()),
+            ("Enter", texts::tui_key_apply()),
+            ("Esc", texts::tui_key_close()),
+        ],
+        OverlaySize::Fixed(SESSION_PROJECT_PICKER_WIDTH, SESSION_PROJECT_PICKER_HEIGHT),
+        overlay_border_style(theme, false),
+    );
+
+    // Keep one full-path viewport even on a short terminal. The selected row
+    // also uses the same viewport when there is not enough room for this pane.
+    let preview_height = if body.height >= 7 { 3 } else { 0 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(preview_height),
+        ])
+        .split(body);
+    render_session_project_filter_input(frame, picker, chunks[0], theme);
+
+    let option_count = app::session_project_option_count(&app.sessions, picker);
+    let filtered_len = picker
+        .filtered_indices
+        .as_ref()
+        .map_or(option_count, Vec::len);
+    let selected_idx = picker.selected_idx.min(filtered_len.saturating_sub(1));
+    let selected_option = session_project_picker_option_at(app, picker, selected_idx, option_count);
+
+    render_session_project_options(
+        frame,
+        app,
+        picker,
+        chunks[1],
+        theme,
+        option_count,
+        filtered_len,
+        selected_idx,
+    );
+    if preview_height > 0 {
+        render_session_project_preview(
+            frame,
+            selected_option,
+            &app.sessions.project_scope,
+            picker.path_scroll,
+            chunks[2],
+            theme,
+        );
+    }
+}
+
+fn render_session_project_filter_input(
+    frame: &mut Frame<'_>,
+    picker: &app::SessionProjectPickerState,
+    area: Rect,
+    theme: &theme::Theme,
+) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .title(format!(" {} ", texts::tui_sessions_project_filter_title()));
+    frame.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    let (visible, cursor_x) = visible_text_window(
+        &picker.input.value,
+        picker.input.cursor,
+        inner.width as usize,
+    );
+    let (text, style) = if picker.input.value.is_empty() {
+        (
+            texts::tui_sessions_project_filter_placeholder().to_string(),
+            Style::default().fg(theme.dim),
+        )
+    } else {
+        (visible, Style::default())
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(text, style)).wrap(Wrap { trim: false }),
+        inner,
+    );
+    if inner.width > 0 && inner.height > 0 {
+        frame.set_cursor_position((
+            inner.x + cursor_x.min(inner.width.saturating_sub(1)),
+            inner.y,
+        ));
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "project picker rendering keeps catalog and viewport state explicit"
+)]
+fn render_session_project_options(
+    frame: &mut Frame<'_>,
+    app: &App,
+    picker: &app::SessionProjectPickerState,
+    area: Rect,
+    theme: &theme::Theme,
+    option_count: usize,
+    filtered_len: usize,
+    selected_idx: usize,
+) {
+    if !app.sessions.project_catalog_is_current() {
+        if app.sessions.project_catalog_loading {
+            render_session_project_status(
+                frame,
+                area,
+                texts::tui_sessions_projects_loading(),
+                Style::default().fg(theme.accent),
+            );
+        } else if let Some(error) = app.sessions.project_catalog_error.as_deref() {
+            let error = bounded_trimmed_text_for_display(error);
+            render_session_project_status(frame, area, &error, Style::default().fg(theme.err));
+        } else {
+            render_session_project_status(
+                frame,
+                area,
+                texts::tui_sessions_projects_loading(),
+                Style::default().fg(theme.dim),
+            );
+        }
+        return;
+    }
+
+    if app.sessions.project_filter_active.is_some() {
+        render_session_project_status(
+            frame,
+            area,
+            texts::tui_sessions_project_filtering(),
+            Style::default().fg(theme.accent),
+        );
+        return;
+    }
+
+    if let Some(error) = picker.filter_error.as_deref() {
+        let error = bounded_trimmed_text_for_display(error);
+        render_session_project_status(frame, area, &error, Style::default().fg(theme.err));
+        return;
+    }
+
+    if filtered_len == 0 {
+        render_session_project_status(
+            frame,
+            area,
+            texts::tui_sessions_projects_no_matches(),
+            Style::default().fg(theme.dim),
+        );
+        return;
+    }
+
+    let wide = area.width >= SESSION_PROJECT_PICKER_WIDE_MIN_WIDTH;
+    let item_height = if wide { 1 } else { 2 };
+    let capacity = (area.height as usize / item_height).max(1);
+    let visible = visible_selection_window(filtered_len, selected_idx, capacity);
+    let visible_start = visible.start;
+    let row_width = area
+        .width
+        .saturating_sub(UnicodeWidthStr::width(highlight_symbol(theme)) as u16);
+    let items = visible.filter_map(|filtered_index| {
+        let option = session_project_picker_option_at(app, picker, filtered_index, option_count)?;
+        let active = session_project_option_is_active(option, &app.sessions.project_scope);
+        Some(session_project_list_item(
+            option,
+            active,
+            row_width,
+            wide,
+            (filtered_index == selected_idx).then_some(picker.path_scroll),
+            area.height < 2,
+            theme,
+        ))
+    });
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::NONE))
+        .highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
+    let mut state = ListState::default();
+    state.select(Some(selected_idx.saturating_sub(visible_start)));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_session_project_status(frame: &mut Frame<'_>, area: Rect, text: &str, style: Style) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let status_area = Rect {
+        x: area.x,
+        y: area.y + area.height.saturating_sub(1) / 2,
+        width: area.width,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(text.to_string(), style)).alignment(Alignment::Center),
+        status_area,
+    );
+}
+
+fn session_project_picker_option_at<'a>(
+    app: &'a App,
+    picker: &'a app::SessionProjectPickerState,
+    filtered_index: usize,
+    option_count: usize,
+) -> Option<app::SessionProjectOption<'a>> {
+    let option_index = match picker.filtered_indices.as_deref() {
+        Some(indices) => indices.get(filtered_index).copied()?,
+        None => filtered_index,
+    };
+    (option_index < option_count)
+        .then(|| app::session_project_option_at(&app.sessions, picker, option_index))
+        .flatten()
+}
+
+fn session_project_option_is_active(
+    option: app::SessionProjectOption<'_>,
+    scope: &crate::session_manager::project_scope::SessionProjectScope,
+) -> bool {
+    use crate::session_manager::project_scope::SessionProjectScope;
+
+    match (option, scope) {
+        (app::SessionProjectOption::All { .. }, SessionProjectScope::All)
+        | (app::SessionProjectOption::Unknown { .. }, SessionProjectScope::Unknown) => true,
+        (
+            app::SessionProjectOption::Exact {
+                normalized_path, ..
+            },
+            SessionProjectScope::Exact {
+                normalized_path: active,
+                ..
+            },
+        ) => normalized_path == active,
+        _ => false,
+    }
+}
+
+fn session_project_list_item(
+    option: app::SessionProjectOption<'_>,
+    active: bool,
+    width: u16,
+    wide: bool,
+    selected_path_scroll: Option<usize>,
+    compact_height: bool,
+    theme: &theme::Theme,
+) -> ListItem<'static> {
+    let marker = if active {
+        texts::tui_marker_active()
+    } else {
+        texts::tui_marker_inactive()
+    };
+    let label = session_project_option_label(option);
+    let count = texts::tui_sessions_project_count(option.session_count());
+    let path = match option {
+        app::SessionProjectOption::Exact { display_path, .. } => display_path,
+        _ => "",
+    };
+
+    if compact_height && !path.is_empty() {
+        let prefix = format!("{marker} ");
+        let fixed_width = UnicodeWidthStr::width(prefix.as_str()) as u16
+            + UnicodeWidthStr::width(count.as_str()) as u16
+            + 1;
+        let path = project_path_window(
+            path,
+            selected_path_scroll.unwrap_or_default(),
+            width.saturating_sub(fixed_width),
+        );
+        return ListItem::new(Line::from(vec![
+            Span::raw(prefix),
+            Span::styled(path, Style::default().fg(theme.comment)),
+            Span::raw(" "),
+            Span::styled(count, Style::default().fg(theme.dim)),
+        ]));
+    }
+
+    if wide {
+        return ListItem::new(session_project_wide_line(
+            marker,
+            &label,
+            path,
+            &count,
+            width,
+            selected_path_scroll,
+            theme,
+        ));
+    }
+
+    let first = session_project_label_count_line(marker, &label, &count, width);
+    let prefix = "   ";
+    let path_width = width.saturating_sub(UnicodeWidthStr::width(prefix) as u16);
+    let path = match selected_path_scroll {
+        Some(scroll) => project_path_window(path, scroll, path_width),
+        None => {
+            truncate_middle_to_display_width(&bounded_trimmed_text_for_display(path), path_width)
+        }
+    };
+    let second = Line::from(vec![
+        Span::raw(prefix.to_string()),
+        Span::styled(path, Style::default().fg(theme.comment)),
+    ]);
+    ListItem::new(Text::from(vec![first, second]))
+}
+
+fn session_project_option_label(option: app::SessionProjectOption<'_>) -> String {
+    match option {
+        app::SessionProjectOption::All { .. } => texts::tui_sessions_all_projects().to_string(),
+        app::SessionProjectOption::Unknown { .. } => {
+            texts::tui_sessions_unknown_project().to_string()
+        }
+        app::SessionProjectOption::Exact { display_path, .. } => {
+            let trimmed = display_path.trim_end_matches(['/', '\\']);
+            let basename = trimmed
+                .rsplit(['/', '\\'])
+                .find(|part| !part.is_empty())
+                .unwrap_or(trimmed);
+            let basename = bounded_trimmed_text_for_display(basename);
+            if basename.is_empty() {
+                bounded_trimmed_text_for_display(display_path)
+            } else {
+                basename
+            }
+        }
+    }
+}
+
+fn session_project_label_count_line(
+    marker: &str,
+    label: &str,
+    count: &str,
+    width: u16,
+) -> Line<'static> {
+    let prefix = format!("{marker}  ");
+    let prefix_width = UnicodeWidthStr::width(prefix.as_str()) as u16;
+    let count_width = UnicodeWidthStr::width(count) as u16;
+    let label_width =
+        width.saturating_sub(prefix_width.saturating_add(count_width).saturating_add(2));
+    let label = truncate_to_display_width(label, label_width);
+    let padding = width
+        .saturating_sub(prefix_width)
+        .saturating_sub(UnicodeWidthStr::width(label.as_str()) as u16)
+        .saturating_sub(count_width)
+        .max(1);
+    Line::raw(format!(
+        "{prefix}{label}{}{count}",
+        " ".repeat(padding as usize)
+    ))
+}
+
+fn session_project_wide_line(
+    marker: &str,
+    label: &str,
+    path: &str,
+    count: &str,
+    width: u16,
+    selected_path_scroll: Option<usize>,
+    theme: &theme::Theme,
+) -> Line<'static> {
+    let prefix = format!("{marker}  ");
+    let prefix_width = UnicodeWidthStr::width(prefix.as_str()) as u16;
+    let count_width = UnicodeWidthStr::width(count) as u16;
+    let remaining = width.saturating_sub(prefix_width);
+    if path.is_empty() || remaining < count_width.saturating_add(18) {
+        return session_project_label_count_line(marker, label, count, width);
+    }
+
+    let label_width = (remaining / 4).clamp(10, 22);
+    let path_width = remaining
+        .saturating_sub(label_width)
+        .saturating_sub(count_width)
+        .saturating_sub(4);
+    let label = truncate_to_display_width(label, label_width);
+    let label_padding = label_width.saturating_sub(UnicodeWidthStr::width(label.as_str()) as u16);
+    let path = match selected_path_scroll {
+        Some(scroll) => project_path_window(path, scroll, path_width),
+        None => {
+            truncate_middle_to_display_width(&bounded_trimmed_text_for_display(path), path_width)
+        }
+    };
+    let path_padding = path_width.saturating_sub(UnicodeWidthStr::width(path.as_str()) as u16);
+    Line::from(vec![
+        Span::raw(prefix),
+        Span::raw(label),
+        Span::raw(" ".repeat(label_padding as usize + 2)),
+        Span::styled(path, Style::default().fg(theme.comment)),
+        Span::raw(" ".repeat(path_padding as usize + 2)),
+        Span::styled(count.to_string(), Style::default().fg(theme.dim)),
+    ])
+}
+
+fn project_path_window(text: &str, scroll: usize, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 || text.is_empty() {
+        return String::new();
+    }
+
+    if scroll == usize::MAX {
+        let mut full = String::new();
+        let mut used = 0usize;
+        let mut fits = true;
+        for ch in text.chars() {
+            let visible = if ch.is_control() { '�' } else { ch };
+            let char_width = UnicodeWidthChar::width(visible).unwrap_or(1).max(1);
+            if used.saturating_add(char_width) > width {
+                fits = false;
+                break;
+            }
+            full.push(visible);
+            used = used.saturating_add(char_width);
+        }
+        if fits {
+            return full;
+        }
+    }
+
+    let mut start = if scroll == usize::MAX {
+        let suffix_budget = width.saturating_sub(1);
+        let mut used = 0usize;
+        let mut suffix_start = text.len();
+        for (offset, ch) in text.char_indices().rev() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            if used.saturating_add(char_width) > suffix_budget {
+                break;
+            }
+            suffix_start = offset;
+            used = used.saturating_add(char_width);
+        }
+        suffix_start
+    } else {
+        scroll.min(text.len())
+    };
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+
+    let has_left = start > 0;
+    let content_width = width.saturating_sub(usize::from(has_left));
+    let mut value = String::new();
+    let mut used = 0usize;
+    let mut end_byte = start;
+    for (offset, ch) in text[start..].char_indices() {
+        let visible = if ch.is_control() { '�' } else { ch };
+        let char_width = UnicodeWidthChar::width(visible).unwrap_or(1).max(1);
+        if used.saturating_add(char_width) > content_width {
+            break;
+        }
+        value.push(visible);
+        used = used.saturating_add(char_width);
+        end_byte = start + offset + ch.len_utf8();
+    }
+    let has_right = end_byte < text.len();
+    if has_right && content_width > 0 {
+        let target = content_width.saturating_sub(1);
+        while used > target {
+            let Some(ch) = value.pop() else {
+                break;
+            };
+            used = used.saturating_sub(UnicodeWidthChar::width(ch).unwrap_or(1).max(1));
+        }
+        value.push('…');
+    }
+    if has_left {
+        value.insert(0, '…');
+    }
+    value
+}
+
+fn truncate_middle_to_display_width(text: &str, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 {
+        return String::new();
+    }
+    if UnicodeWidthStr::width(text) <= width {
+        return text.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let available = width - 1;
+    let left_width = available / 2;
+    let right_width = available - left_width;
+    let mut left = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used.saturating_add(ch_width) > left_width {
+            break;
+        }
+        left.push(ch);
+        used = used.saturating_add(ch_width);
+    }
+
+    let mut right_reversed = Vec::new();
+    used = 0;
+    for ch in text.chars().rev() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used.saturating_add(ch_width) > right_width {
+            break;
+        }
+        right_reversed.push(ch);
+        used = used.saturating_add(ch_width);
+    }
+    right_reversed.reverse();
+    format!("{left}…{}", right_reversed.into_iter().collect::<String>())
+}
+
+fn render_session_project_preview(
+    frame: &mut Frame<'_>,
+    option: Option<app::SessionProjectOption<'_>>,
+    scope: &crate::session_manager::project_scope::SessionProjectScope,
+    path_scroll: usize,
+    area: Rect,
+    theme: &theme::Theme,
+) {
+    let value = match option {
+        Some(app::SessionProjectOption::All { .. }) => texts::tui_sessions_all_projects(),
+        Some(app::SessionProjectOption::Unknown { .. }) => texts::tui_sessions_unknown_project(),
+        Some(app::SessionProjectOption::Exact { display_path, .. }) => display_path,
+        None => match scope {
+            crate::session_manager::project_scope::SessionProjectScope::All => {
+                texts::tui_sessions_all_projects()
+            }
+            crate::session_manager::project_scope::SessionProjectScope::Unknown => {
+                texts::tui_sessions_unknown_project()
+            }
+            crate::session_manager::project_scope::SessionProjectScope::Exact {
+                display_path,
+                ..
+            } => display_path,
+        },
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.dim))
+        .title(format!(" {} ", texts::tui_sessions_project_directory()));
+    frame.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    frame.render_widget(
+        Paragraph::new(project_path_window(value, path_scroll, inner.width))
+            .style(Style::default().fg(theme.comment)),
+        inner,
+    );
+}
+
 pub(super) fn render_openclaw_agents_fallback_picker_overlay(
     frame: &mut Frame<'_>,
     app: &App,
@@ -1652,5 +2214,33 @@ impl AppToggleState for crate::app_config::SkillApps {
 impl AppToggleState for crate::settings::VisibleApps {
     fn is_enabled_for(&self, app_type: &crate::app_config::AppType) -> bool {
         self.is_enabled_for(app_type)
+    }
+}
+
+#[cfg(test)]
+mod session_project_path_tests {
+    use super::*;
+
+    #[test]
+    fn selected_project_path_window_can_reach_both_ends() {
+        let path = "/workspace/one/shared-name";
+        let start = project_path_window(path, 0, 12);
+        let end = project_path_window(path, usize::MAX, 12);
+
+        assert!(start.starts_with("/workspace"));
+        assert!(start.ends_with('…'));
+        assert!(end.starts_with('…'));
+        assert!(end.ends_with("shared-name"));
+        assert!(UnicodeWidthStr::width(start.as_str()) <= 12);
+        assert!(UnicodeWidthStr::width(end.as_str()) <= 12);
+    }
+
+    #[test]
+    fn selected_project_path_window_repairs_utf8_scroll_boundary() {
+        let path = "/目录/very-long-project";
+        let window = project_path_window(path, 2, 10);
+
+        assert!(window.starts_with('…'));
+        assert!(UnicodeWidthStr::width(window.as_str()) <= 10);
     }
 }

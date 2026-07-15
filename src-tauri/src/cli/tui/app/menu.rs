@@ -60,6 +60,8 @@ impl App {
             toast: None,
             should_quit: false,
             pending_deep_search: None,
+            pending_project_catalog: false,
+            pending_project_filter: None,
             last_size: Size::new(0, 0),
             tick: 0,
             proxy_input_activity_samples: Vec::new(),
@@ -497,7 +499,10 @@ impl App {
         if self.editor.is_some() || self.filter.active || self.form_text_input_is_active() {
             return false;
         }
-        if matches!(self.overlay, Overlay::Help(_)) || self.overlay_text_input_is_active() {
+        let project_picker = matches!(self.overlay, Overlay::SessionProjectPicker(_));
+        if matches!(self.overlay, Overlay::Help(_))
+            || (self.overlay_text_input_is_active() && !project_picker)
+        {
             return false;
         }
         !self.overlay.is_active()
@@ -688,19 +693,6 @@ impl App {
                 return self.on_usage_key(key, data);
             }
             KeyCode::Char('q') | KeyCode::Esc => {
-                // If in sessions "show all providers" mode, Esc exits that mode
-                // instead of navigating back.
-                if matches!(self.route, Route::Sessions) && self.sessions.show_all_providers {
-                    self.sessions.show_all_providers = false;
-                    self.sessions.selected_idx = 0;
-                    self.sessions.clear_detail();
-                    let query = self.filter.input.value.trim().to_lowercase();
-                    return if query.is_empty() {
-                        Action::SessionsDeepSearchCancel
-                    } else {
-                        Action::SessionsDeepSearch { query }
-                    };
-                }
                 return self.on_back_key();
             }
             _ => {}
@@ -997,14 +989,6 @@ impl App {
             self.sessions.pane = SessionsPane::List;
             if filter_changed {
                 self.sessions.selected_idx = 0;
-                self.sessions.materialized_query = None;
-                if self
-                    .sessions
-                    .page_token()
-                    .is_some_and(|token| token.source == SessionPageSource::Query)
-                {
-                    let _ = self.sessions.stage_base_restore();
-                }
             }
         }
         self.clamp_selections(data);
@@ -1035,8 +1019,8 @@ impl App {
         let visible_session_rows = visible_sessions_for_state(
             &self.filter,
             &self.app_type,
-            self.sessions.show_all_providers,
             self.sessions.provider_id.as_deref(),
+            &self.sessions.project_scope,
             &self.sessions.rows,
             self.sessions.detail_key.as_deref(),
             self.sessions.messages_loaded,
@@ -1044,7 +1028,7 @@ impl App {
             self.sessions.deep_search_query.as_deref(),
             &self.sessions.deep_search_results,
             self.sessions
-                .materialized_query_is_current(self.filter.query_lower().as_deref()),
+                .materialized_view_is_current(self.filter.query_lower().as_deref()),
             self.sessions.rows_revision,
             self.sessions.messages_revision,
             self.sessions.deep_search_seq,

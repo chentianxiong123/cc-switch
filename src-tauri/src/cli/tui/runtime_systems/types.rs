@@ -114,7 +114,7 @@ pub(crate) enum SessionReq {
     Search {
         request_id: u64,
         scope_epoch: u64,
-        query: String,
+        view: crate::session_manager::project_scope::SessionViewSpec,
         base: crate::cli::tui::app::SessionPageToken,
         base_reader: crate::session_manager::paged_manifest::ManifestReader,
         query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
@@ -124,6 +124,25 @@ pub(crate) enum SessionReq {
     /// the search dispatcher advances its generation so provider loops can
     /// cooperatively stop disk and CPU work.
     CancelSearch,
+    ProjectCatalog {
+        request_id: u64,
+        scope_epoch: u64,
+        base: crate::cli::tui::app::SessionPageToken,
+        base_reader: crate::session_manager::paged_manifest::ManifestReader,
+    },
+    CancelProjectCatalog,
+    ProjectFilter {
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        base_generation: String,
+        query: String,
+        catalog: std::sync::Arc<crate::session_manager::project_scope::SessionProjectCatalog>,
+        project_offset: usize,
+        fixed_matches: Vec<usize>,
+        trailing_matches: Vec<usize>,
+    },
+    CancelProjectFilter,
 }
 
 pub(crate) enum SessionMsg {
@@ -203,7 +222,7 @@ pub(crate) enum SessionMsg {
         scope_epoch: u64,
         scope: String,
         base_generation: String,
-        query: String,
+        view: crate::session_manager::project_scope::SessionViewSpec,
         query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
         result: Result<
             (
@@ -212,6 +231,21 @@ pub(crate) enum SessionMsg {
             ),
             String,
         >,
+    },
+    ProjectCatalogBuilt {
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        base_generation: String,
+        result: Result<crate::session_manager::project_scope::SessionProjectCatalog, String>,
+    },
+    ProjectFilterBuilt {
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        base_generation: String,
+        query: String,
+        result: Result<Vec<usize>, String>,
     },
 }
 

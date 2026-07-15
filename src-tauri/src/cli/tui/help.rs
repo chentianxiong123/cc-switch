@@ -49,6 +49,7 @@ impl HelpContent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HelpTarget {
     Global,
+    Sessions,
     ProviderTemplate,
     ProviderField {
         app_type: AppType,
@@ -104,12 +105,17 @@ fn current_help_target(app: &App) -> HelpTarget {
             Overlay::ManagedAccountPicker { .. } | Overlay::ManagedAccountActionPicker { .. } => {
                 provider_field_overlay_target(app, ProviderAddField::CodexOAuthAccount)
             }
+            Overlay::SessionProjectPicker(_) => HelpTarget::Sessions,
             _ => HelpTarget::Global,
         };
     }
 
     if app.editor.is_some() || app.filter.active {
         return HelpTarget::Empty;
+    }
+
+    if matches!(app.route, super::route::Route::Sessions) {
+        return HelpTarget::Sessions;
     }
 
     let Some(FormState::ProviderAdd(provider)) = app.form.as_ref() else {
@@ -226,6 +232,13 @@ fn help_for_target(target: HelpTarget, app: &App, data: &UiData) -> HelpContent 
         HelpTarget::Global => {
             HelpContent::new(texts::tui_help_title(), global_help_lines(app, data))
         }
+        HelpTarget::Sessions => HelpContent::new(
+            texts::tui_sessions_title(),
+            help_lines(
+                "会话始终只显示当前应用，结果由项目范围 × / 搜索共同决定。\n←/→ 切换列表和详情，h/l 是备用键；↑/↓ 逐项移动，PgUp/PgDn 按页移动。p 打开项目选择器；Home/End 跳到首尾，Shift+←/→ 查看完整目录，Shift+Home/End 直达目录两端。\n“未知目录”位于项目列表末尾，只包含缺少项目目录的旧会话；精确项目按词法规范化后的完整目录匹配。",
+                "Sessions always show the current app; results combine Project scope × / Search.\nUse ←/→ to switch between the list and details; h/l are aliases. Use ↑/↓ to move one item and PgUp/PgDn to move by a page. Press p to choose a project; Home/End jumps to either list end, Shift+←/→ reveals the complete directory, and Shift+Home/End jumps to either path end.\nUnknown directory is last and contains only legacy sessions without a project directory; exact projects match the complete lexically normalized directory.",
+            ),
+        ),
         HelpTarget::ProviderTemplate => HelpContent::new(
             tr("供应商模板", "Provider templates"),
             help_lines(

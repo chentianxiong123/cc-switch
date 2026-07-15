@@ -35,8 +35,8 @@ impl App {
         let visible = visible_sessions_for_state(
             &self.filter,
             &self.app_type,
-            self.sessions.show_all_providers,
             self.sessions.provider_id.as_deref(),
+            &self.sessions.project_scope,
             &self.sessions.rows,
             self.sessions.detail_key.as_deref(),
             self.sessions.messages_loaded,
@@ -44,7 +44,7 @@ impl App {
             self.sessions.deep_search_query.as_deref(),
             &self.sessions.deep_search_results,
             self.sessions
-                .materialized_query_is_current(self.filter.query_lower().as_deref()),
+                .materialized_view_is_current(self.filter.query_lower().as_deref()),
             self.sessions.rows_revision,
             self.sessions.messages_revision,
             self.sessions.deep_search_seq,
@@ -496,8 +496,8 @@ impl App {
         let visible = visible_sessions_for_state(
             &self.filter,
             &self.app_type,
-            self.sessions.show_all_providers,
             self.sessions.provider_id.as_deref(),
+            &self.sessions.project_scope,
             &self.sessions.rows,
             self.sessions.detail_key.as_deref(),
             self.sessions.messages_loaded,
@@ -505,7 +505,7 @@ impl App {
             self.sessions.deep_search_query.as_deref(),
             &self.sessions.deep_search_results,
             self.sessions
-                .materialized_query_is_current(self.filter.query_lower().as_deref()),
+                .materialized_view_is_current(self.filter.query_lower().as_deref()),
             self.sessions.rows_revision,
             self.sessions.messages_revision,
             self.sessions.deep_search_seq,
@@ -754,22 +754,7 @@ impl App {
                         Action::None
                     }
                     Intent::Refresh => Action::SessionsRefresh,
-                    Intent::ShowAll => {
-                        // Enter "show all providers" mode (the "全部" tab)
-                        if !self.sessions.show_all_providers {
-                            self.sessions.show_all_providers = true;
-                            self.sessions.selected_idx = 0;
-                            self.sessions.pagination.reset(0, None);
-                            self.sessions.clear_detail();
-                            let query = self.filter.input.value.trim().to_lowercase();
-                            return if query.is_empty() {
-                                Action::SessionsDeepSearchCancel
-                            } else {
-                                Action::SessionsDeepSearch { query }
-                            };
-                        }
-                        Action::None
-                    }
+                    Intent::Project => Action::SessionsProjectCatalogLoad,
                 }
             }
         }
@@ -807,8 +792,8 @@ impl App {
         let visible = visible_sessions_for_state(
             &self.filter,
             &self.app_type,
-            self.sessions.show_all_providers,
             self.sessions.provider_id.as_deref(),
+            &self.sessions.project_scope,
             &self.sessions.rows,
             self.sessions.detail_key.as_deref(),
             self.sessions.messages_loaded,
@@ -816,7 +801,7 @@ impl App {
             self.sessions.deep_search_query.as_deref(),
             &self.sessions.deep_search_results,
             self.sessions
-                .materialized_query_is_current(self.filter.query_lower().as_deref()),
+                .materialized_view_is_current(self.filter.query_lower().as_deref()),
             self.sessions.rows_revision,
             self.sessions.messages_revision,
             self.sessions.deep_search_seq,

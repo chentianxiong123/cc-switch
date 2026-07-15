@@ -1661,6 +1661,10 @@ fn cache_invalidation_for_action(action: &Action) -> CacheInvalidation {
         | Action::SessionsRefresh
         | Action::SessionsDeepSearch { .. }
         | Action::SessionsDeepSearchCancel
+        | Action::SessionsProjectCatalogLoad
+        | Action::SessionsProjectFilter { .. }
+        | Action::SessionsProjectFilterCancel
+        | Action::SessionsProjectApply { .. }
         | Action::SessionMessagesLoad { .. }
         | Action::SessionResume { .. }
         | Action::SessionDelete { .. }
@@ -1952,7 +1956,9 @@ fn handle_tui_action(
     }
     let should_queue_sessions_refresh = matches!(
         &action,
-        Action::SwitchRoute(route::Route::Sessions) | Action::SetAppType(_)
+        Action::SwitchRoute(route::Route::Sessions)
+            | Action::SetAppType(_)
+            | Action::SessionsDeepSearchCancel
     );
     let result = match action {
         Action::None => Ok(()),
@@ -1964,12 +1970,18 @@ fn handle_tui_action(
             if let Some(tx) = session_req_tx {
                 let _ = tx.send(SessionReq::CancelSearch);
                 let _ = tx.send(SessionReq::CancelMessages);
+                let _ = tx.send(SessionReq::CancelProjectCatalog);
+                let _ = tx.send(SessionReq::CancelProjectFilter);
             }
             app.sessions.clear_detail();
             let _ = app.sessions.take_message_cancel_pending();
             app.sessions.deep_search_active = None;
             app.sessions.deep_search_pending = None;
             app.pending_deep_search = None;
+            app.pending_project_catalog = false;
+            app.pending_project_filter = None;
+            app.sessions.cancel_project_catalog();
+            app.sessions.cancel_project_filter();
             app.sessions.deep_search_query = None;
             app.sessions.clear_deep_search_results();
             data_cache.switch_to(app, data, app_data_req_tx, next)?;
@@ -2068,17 +2080,38 @@ fn queue_sessions_refresh_if_needed(
     if !matches!(app.route, route::Route::Sessions) {
         return;
     }
-    // When "show all providers" is on, use "all" as the virtual provider id
-    // so the worker scans every provider and the cache is keyed separately.
-    let provider_id = if app.sessions.show_all_providers {
-        "all".to_string()
-    } else {
-        app.app_type.as_str().to_string()
-    };
+    let provider_id = app.app_type.as_str().to_string();
+    let query = app.filter.query_lower().unwrap_or_default();
+    let desired = app.sessions.desired_view_spec(Some(&query));
+
     let purge_refresh = app.sessions.purge_refresh_required();
-    if (!purge_refresh && app.sessions.loaded_for_provider(&provider_id))
-        || (app.sessions.provider_id.as_deref() == Some(provider_id.as_str())
-            && app.sessions.scan_active.is_some())
+    // Desired views are rebuilt from the saved authoritative base before the
+    // scan-attempt guard is considered. That guard prevents failed-scan retry
+    // storms; it must not block recovery or a debounced project/query change.
+    let current_base_available = app.sessions.provider_id.as_deref() == Some(provider_id.as_str())
+        && app.sessions.base_query_source().is_some();
+    if !purge_refresh && current_base_available {
+        if desired.is_base_view() {
+            if !app.sessions.base_view_is_current() {
+                app.sessions.ensure_base_restore_staged();
+            }
+        } else if !app.sessions.materialized_view_is_current(Some(&query))
+            && !app
+                .sessions
+                .materialization_failed_for_current_base(&desired)
+            && app.sessions.deep_search_active.is_none()
+            && app.sessions.deep_search_pending.is_none()
+            && app.pending_deep_search.is_none()
+        {
+            app.pending_deep_search = Some(query);
+        }
+        return;
+    }
+    if !purge_refresh && app.sessions.loaded_for_provider(&provider_id) {
+        return;
+    }
+    if (app.sessions.provider_id.as_deref() == Some(provider_id.as_str())
+        && app.sessions.scan_active.is_some())
         || (!purge_refresh && app.sessions.scan_attempted_for_scope(&provider_id))
     {
         return;
@@ -2650,8 +2683,23 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
             }
 
             // Fire pending deep search from debounce timer
-            if let Some(query) = app.pending_deep_search.take() {
-                runtime_actions::queue_sessions_deep_search(
+            if matches!(app.route, route::Route::Sessions) {
+                if let Some(query) = app.pending_deep_search.take() {
+                    runtime_actions::queue_pending_sessions_deep_search(
+                        &mut app,
+                        sessions.as_ref().map(|system| &system.req_tx),
+                        query,
+                    );
+                }
+            }
+            if app.pending_project_catalog {
+                runtime_actions::queue_sessions_project_catalog(
+                    &mut app,
+                    sessions.as_ref().map(|system| &system.req_tx),
+                );
+            }
+            if let Some(query) = app.pending_project_filter.take() {
+                runtime_actions::queue_sessions_project_filter(
                     &mut app,
                     sessions.as_ref().map(|system| &system.req_tx),
                     query,
@@ -3038,8 +3086,23 @@ pub fn run(app_override: Option<AppType>) -> Result<(), AppError> {
         }
 
         // Fire pending deep search from debounce timer
-        if let Some(query) = app.pending_deep_search.take() {
-            runtime_actions::queue_sessions_deep_search(
+        if matches!(app.route, route::Route::Sessions) {
+            if let Some(query) = app.pending_deep_search.take() {
+                runtime_actions::queue_pending_sessions_deep_search(
+                    &mut app,
+                    sessions.as_ref().map(|system| &system.req_tx),
+                    query,
+                );
+            }
+        }
+        if app.pending_project_catalog {
+            runtime_actions::queue_sessions_project_catalog(
+                &mut app,
+                sessions.as_ref().map(|system| &system.req_tx),
+            );
+        }
+        if let Some(query) = app.pending_project_filter.take() {
+            runtime_actions::queue_sessions_project_filter(
                 &mut app,
                 sessions.as_ref().map(|system| &system.req_tx),
                 query,

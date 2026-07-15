@@ -4164,19 +4164,11 @@ pub mod texts {
         }
     }
 
-    pub fn tui_key_sessions_all() -> &'static str {
+    pub fn tui_key_sessions_project() -> &'static str {
         if is_chinese() {
-            "全部"
+            "项目"
         } else {
-            "show all"
-        }
-    }
-
-    pub fn tui_key_sessions_all_active() -> &'static str {
-        if is_chinese() {
-            "全部 (Esc返回)"
-        } else {
-            "showing all (Esc back)"
+            "project"
         }
     }
 
@@ -8449,6 +8441,88 @@ pub mod texts {
         }
     }
 
+    pub fn tui_sessions_project_picker_title() -> &'static str {
+        if is_chinese() {
+            "项目范围"
+        } else {
+            "Project scope"
+        }
+    }
+
+    pub fn tui_sessions_project_filter_title() -> &'static str {
+        if is_chinese() {
+            "筛选项目"
+        } else {
+            "Filter projects"
+        }
+    }
+
+    pub fn tui_sessions_project_filter_placeholder() -> &'static str {
+        if is_chinese() {
+            "输入名称或路径…"
+        } else {
+            "Type a name or path…"
+        }
+    }
+
+    pub fn tui_sessions_all_projects() -> &'static str {
+        if is_chinese() {
+            "全部项目"
+        } else {
+            "All projects"
+        }
+    }
+
+    pub fn tui_sessions_unknown_project() -> &'static str {
+        if is_chinese() {
+            "未知目录"
+        } else {
+            "Unknown directory"
+        }
+    }
+
+    pub fn tui_sessions_projects_loading() -> &'static str {
+        if is_chinese() {
+            "正在读取项目目录…"
+        } else {
+            "Loading project directories…"
+        }
+    }
+
+    pub fn tui_sessions_projects_no_matches() -> &'static str {
+        if is_chinese() {
+            "没有匹配的项目"
+        } else {
+            "No matching projects"
+        }
+    }
+
+    pub fn tui_sessions_project_count(count: usize) -> String {
+        if is_chinese() {
+            format!("{count} 个会话")
+        } else if count == 1 {
+            "1 session".to_string()
+        } else {
+            format!("{count} sessions")
+        }
+    }
+
+    pub fn tui_sessions_scope_summary(provider: &str, project: &str, status: &str) -> String {
+        if is_chinese() {
+            format!("范围  {provider} · {project} · {status}")
+        } else {
+            format!("Scope  {provider} · {project} · {status}")
+        }
+    }
+
+    pub fn tui_sessions_project_filtering() -> &'static str {
+        if is_chinese() {
+            "正在应用范围…"
+        } else {
+            "Applying scope…"
+        }
+    }
+
     pub fn tui_pagination_range(page: usize, start: usize, end: usize, total: usize) -> String {
         if is_chinese() {
             format!("第 {page} 页 · {start}–{end} / {total}")
@@ -8472,9 +8546,9 @@ pub mod texts {
 
     pub fn tui_pagination_next_trigger() -> &'static str {
         if is_chinese() {
-            "↓ 再次下滚 / PgDn / Enter：下一页"
+            "↓ 再次下滚 / Enter：下一页"
         } else {
-            "↓ Scroll again / PgDn / Enter: next page"
+            "↓ Scroll again / Enter: next page"
         }
     }
 
@@ -8496,9 +8570,9 @@ pub mod texts {
 
     pub fn tui_pagination_previous_trigger() -> &'static str {
         if is_chinese() {
-            "↑ 再次上滚 / PgUp / Enter：上一页"
+            "↑ 再次上滚 / Enter：上一页"
         } else {
-            "↑ Scroll again / PgUp / Enter: previous page"
+            "↑ Scroll again / Enter: previous page"
         }
     }
 

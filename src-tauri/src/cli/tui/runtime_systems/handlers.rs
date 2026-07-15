@@ -215,8 +215,8 @@ fn visible_session_rows(app: &App) -> super::super::app::SessionRowsView<'_> {
     super::super::app::visible_sessions_for_state(
         &app.filter,
         &app.app_type,
-        app.sessions.show_all_providers,
         app.sessions.provider_id.as_deref(),
+        &app.sessions.project_scope,
         &app.sessions.rows,
         app.sessions.detail_key.as_deref(),
         app.sessions.messages_loaded,
@@ -224,12 +224,54 @@ fn visible_session_rows(app: &App) -> super::super::app::SessionRowsView<'_> {
         app.sessions.deep_search_query.as_deref(),
         &app.sessions.deep_search_results,
         app.sessions
-            .materialized_query_is_current(app.filter.query_lower().as_deref()),
+            .materialized_view_is_current(app.filter.query_lower().as_deref()),
         app.sessions.rows_revision,
         app.sessions.messages_revision,
         app.sessions.deep_search_seq,
         &app.sessions.visibility_cache,
     )
+}
+
+fn desired_session_view(app: &App) -> crate::session_manager::project_scope::SessionViewSpec {
+    let query = app
+        .sessions
+        .deep_search_pending
+        .as_ref()
+        .map(|(query, _)| query.as_str())
+        .or(app.sessions.deep_search_query.as_deref())
+        .or_else(|| {
+            (matches!(app.route, super::super::route::Route::Sessions)
+                && matches!(app.filter.scope, super::super::app::FilterScope::Global))
+            .then(|| app.filter.input.value.trim())
+        })
+        .unwrap_or_default();
+    app.sessions.desired_view_spec(Some(query))
+}
+
+fn queue_current_session_view(app: &mut App) {
+    let desired = desired_session_view(app);
+    if desired.is_base_view()
+        || app
+            .sessions
+            .materialized_view_is_current(Some(&desired.query))
+        || app
+            .sessions
+            .materialization_failed_for_current_base(&desired)
+        || app.sessions.deep_search_active.is_some()
+        || app.sessions.deep_search_pending.is_some()
+        || app.pending_deep_search.is_some()
+    {
+        return;
+    }
+    app.pending_deep_search = Some(desired.query);
+}
+
+fn refresh_project_picker_if_open(app: &mut App) {
+    if super::super::runtime_actions::session_project_picker(app).is_some()
+        && !app.sessions.project_catalog_is_current()
+    {
+        app.pending_project_catalog = true;
+    }
 }
 
 fn capture_session_selection(app: &App) -> SessionSelectionAnchor {
@@ -339,6 +381,11 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                         super::super::app::retire_session_rows(page.rows);
                         return;
                     }
+                    let base_changed = app.sessions.base_manifest.as_ref().is_none_or(|base| {
+                        base.scope_epoch != scope_epoch
+                            || base.scope != scope
+                            || base.generation != page.generation
+                    });
                     app.sessions.remember_base_manifest(
                         scope_epoch,
                         &scope,
@@ -346,11 +393,17 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                         page.total_rows,
                         reader.clone(),
                     );
-                    let keep_query_visible = app.sessions.page_token().is_some_and(|token| {
+                    refresh_project_picker_if_open(app);
+                    let keep_derived_visible = app.sessions.page_token().is_some_and(|token| {
                         token.source == super::super::app::SessionPageSource::Query
-                    }) && app.sessions.materialized_query.is_some();
-                    if keep_query_visible {
+                    }) && !desired_session_view(app).is_base_view();
+                    if keep_derived_visible {
                         super::super::app::retire_session_rows(page.rows);
+                        if base_changed {
+                            let desired = desired_session_view(app);
+                            app.sessions.deep_search_active = None;
+                            app.pending_deep_search = Some(desired.query);
+                        }
                     } else {
                         app.sessions.apply_opened_manifest(
                             scope_epoch,
@@ -368,15 +421,8 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                     app.sessions.last_error = Some(error);
                 }
             }
-            let query_already_materialized = app
-                .sessions
-                .materialized_query_is_current(app.sessions.deep_search_query.as_deref());
-            if app.sessions.deep_search_active.is_none() && !query_already_materialized {
-                if let Some(query) = app.sessions.deep_search_query.clone() {
-                    if !query.is_empty() && app.sessions.base_manifest.is_some() {
-                        app.pending_deep_search = Some(query);
-                    }
-                }
+            if app.sessions.deep_search_active.is_none() && app.sessions.base_manifest.is_some() {
+                queue_current_session_view(app);
             }
         }
         SessionMsg::ScanProvisional {
@@ -411,19 +457,19 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                     published.total_rows,
                     reader.clone(),
                 );
-                let desired_query = app
-                    .sessions
-                    .deep_search_query
-                    .clone()
-                    .filter(|query| !query.is_empty());
-                if app.sessions.page_token().is_some() && desired_query.is_some() {
+                refresh_project_picker_if_open(app);
+                let desired_view = desired_session_view(app);
+                let derived_is_visible = app.sessions.page_token().is_some_and(|token| {
+                    token.source == super::super::app::SessionPageSource::Query
+                });
+                if derived_is_visible && !desired_view.is_base_view() {
                     super::super::app::retire_session_rows(published.first_page.rows);
                     app.sessions
                         .mark_query_tombstones_for_rebuild(safe_tombstones);
                     app.sessions.scan_active = None;
                     app.sessions.loading = false;
                     app.sessions.deep_search_active = None;
-                    app.pending_deep_search = desired_query;
+                    app.pending_deep_search = Some(desired_view.query);
                     return;
                 }
                 if app.sessions.page_token().is_none() {
@@ -456,9 +502,9 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                             .attach_pending_manifest_tombstones(safe_tombstones);
                     }
                 }
-                if let Some(query) = desired_query {
+                if !desired_view.is_base_view() {
                     app.sessions.deep_search_active = None;
-                    app.pending_deep_search = Some(query);
+                    app.pending_deep_search = Some(desired_view.query);
                 }
             }
             Err(error) => {
@@ -624,24 +670,26 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                 published.total_rows,
                 reader,
             );
+            refresh_project_picker_if_open(app);
             super::super::app::retire_session_rows(published.first_page.rows);
             let Some(base) = app.sessions.base_manifest.clone() else {
                 app.sessions.require_purge_refresh();
                 return;
             };
-            let query_is_visible =
+            let derived_is_visible =
                 app.sessions.page_token().is_some_and(|token| {
                     token.source == super::super::app::SessionPageSource::Query
-                }) && app.sessions.materialized_query.is_some();
-            if query_is_visible {
+                }) && app.sessions.materialized_view.is_some();
+            if derived_is_visible {
                 // Query caches are private to this TUI and are never adopted
                 // from a global purge. Keep the old query pinned/tombstoned
                 // until the same query is rebuilt from the newest base.
                 app.sessions
                     .mark_query_tombstone_for_rebuild(request_id, key);
-                if let Some(query) = app.sessions.deep_search_query.clone() {
+                let desired = desired_session_view(app);
+                if !desired.is_base_view() {
                     app.sessions.deep_search_active = None;
-                    app.pending_deep_search = Some(query);
+                    app.pending_deep_search = Some(desired.query);
                 }
             } else {
                 if !app.sessions.stage_purged_manifest(
@@ -657,6 +705,7 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                 ) {
                     app.sessions.require_purge_refresh();
                 }
+                queue_current_session_view(app);
             }
         }
         SessionMsg::QueryPublished {
@@ -664,17 +713,17 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
             scope_epoch,
             scope,
             base_generation,
-            query,
+            view,
             query_namespace,
             result,
         } => {
-            let normalized_query = query.trim().to_lowercase();
+            let desired_view = desired_session_view(app);
             let current_base = app.sessions.base_manifest.as_ref();
             let current = app.sessions.deep_search_active == Some(request_id)
                 && app.sessions.scope_epoch == scope_epoch
                 && app.sessions.provider_id.as_deref() == Some(scope.as_str())
                 && app.sessions.query_namespace == query_namespace
-                && app.sessions.deep_search_query.as_deref() == Some(normalized_query.as_str())
+                && desired_view == view
                 && current_base.is_some_and(|base| {
                     base.scope_epoch == scope_epoch
                         && base.scope == scope
@@ -688,10 +737,12 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                 // superseded by refresh. Re-run it against the saved newest base.
                 if app.sessions.scope_epoch == scope_epoch
                     && app.sessions.query_namespace == query_namespace
-                    && app.sessions.deep_search_query.as_deref() == Some(normalized_query.as_str())
+                    && desired_view == view
                 {
-                    app.sessions.deep_search_active = None;
-                    app.pending_deep_search = Some(normalized_query);
+                    if app.sessions.deep_search_active == Some(request_id) {
+                        app.sessions.deep_search_active = None;
+                    }
+                    queue_current_session_view(app);
                 }
                 return;
             }
@@ -703,7 +754,7 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                         scope_epoch,
                         &scope,
                         &base_generation,
-                        normalized_query,
+                        view,
                         published.generation,
                         published.total_rows,
                         published.first_page.page_index,
@@ -712,24 +763,86 @@ pub(crate) fn handle_session_msg(app: &mut App, msg: SessionMsg) {
                     );
                 }
                 Err(error) => {
-                    if app.sessions.has_query_tombstones_to_clear() {
-                        // The rebuilt query was the intended convergence point
-                        // for one or more deletes. Fall back to the already
-                        // published safe base instead of pinning the old query
-                        // (and its UI tombstones) indefinitely.
-                        app.sessions.deep_search_query = None;
-                        app.pending_deep_search = None;
-                        if !app.sessions.stage_base_restore() {
-                            app.sessions.require_purge_refresh();
-                        }
-                    }
-                    if app.sessions.page_token().is_none() {
-                        app.sessions.last_error = Some(error.clone());
-                    }
+                    app.sessions.mark_materialization_failed(
+                        scope_epoch,
+                        &scope,
+                        &base_generation,
+                        view,
+                    );
+                    // Keep any exact delete tombstones attached to the visible
+                    // query. Retrying the same failed build—or forcing another
+                    // full scan—would only create a hot loop. A changed view,
+                    // changed base, Enter, or explicit `r` opens the retry gate.
+                    app.sessions.last_error = Some(error.clone());
                     app.push_toast(
                         texts::tui_sessions_toast_refresh_failed(&error),
                         ToastKind::Warning,
                     );
+                }
+            }
+        }
+        SessionMsg::ProjectCatalogBuilt {
+            request_id,
+            scope_epoch,
+            scope,
+            base_generation,
+            result,
+        } => match result {
+            Ok(catalog) => {
+                if app.sessions.finish_project_catalog(
+                    request_id,
+                    scope_epoch,
+                    scope,
+                    base_generation,
+                    catalog,
+                ) {
+                    super::super::runtime_actions::sync_session_project_picker(app);
+                }
+            }
+            Err(error) => {
+                let _ = app.sessions.fail_project_catalog(request_id, error);
+            }
+        },
+        SessionMsg::ProjectFilterBuilt {
+            request_id,
+            scope_epoch,
+            scope,
+            base_generation,
+            query,
+            result,
+        } => {
+            let query_is_current = super::super::runtime_actions::session_project_picker(app)
+                .is_some_and(|picker| picker.input.value.trim().to_lowercase() == query);
+            if !query_is_current {
+                let _ = app.sessions.fail_project_filter(request_id);
+                return;
+            }
+            match result {
+                Ok(indices) => {
+                    if app.sessions.finish_project_filter(
+                        request_id,
+                        scope_epoch,
+                        &scope,
+                        &base_generation,
+                    ) {
+                        if let Some(picker) =
+                            super::super::runtime_actions::session_project_picker_mut(app)
+                        {
+                            picker.filtered_indices = Some(indices);
+                            picker.selected_idx = 0;
+                            picker.path_scroll = 0;
+                            picker.filter_error = None;
+                        }
+                    }
+                }
+                Err(error) => {
+                    if app.sessions.fail_project_filter(request_id) {
+                        if let Some(picker) =
+                            super::super::runtime_actions::session_project_picker_mut(app)
+                        {
+                            picker.filter_error = Some(error);
+                        }
+                    }
                 }
             }
         }
@@ -1745,6 +1858,158 @@ mod tests {
     }
 
     #[test]
+    fn project_filter_result_installs_only_for_the_latest_picker_request() {
+        let mut alpha = session("claude", "alpha", 2);
+        alpha.project_dir = Some("/repo/alpha".to_string());
+        let mut beta = session("claude", "beta", 1);
+        beta.project_dir = Some("/repo/beta".to_string());
+        let (published, reader) = published("ignored", 2, vec![alpha, beta]);
+        let mut app = App::new(Some(AppType::Claude));
+        let _ = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        assert!(app.sessions.remember_base_manifest(
+            scope_epoch,
+            "claude",
+            published.generation.clone(),
+            published.total_rows,
+            reader.clone(),
+        ));
+        let catalog =
+            crate::session_manager::project_scope::aggregate_project_directories(&reader, &|| {
+                false
+            })
+            .expect("project catalog");
+        let catalog_request = app
+            .sessions
+            .start_project_catalog()
+            .expect("catalog request");
+        assert!(app.sessions.finish_project_catalog(
+            catalog_request,
+            scope_epoch,
+            "claude".to_string(),
+            published.generation.clone(),
+            catalog,
+        ));
+        app.overlay =
+            Overlay::SessionProjectPicker(crate::cli::tui::app::SessionProjectPickerState {
+                input: TextInput::new("beta"),
+                selected_idx: 0,
+                path_scroll: 0,
+                filtered_indices: Some(Vec::new()),
+                pinned_scope: None,
+                filter_error: None,
+            });
+
+        let stale_request = app.sessions.start_project_filter().expect("stale filter");
+        let current_request = app.sessions.start_project_filter().expect("current filter");
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ProjectFilterBuilt {
+                request_id: stale_request,
+                scope_epoch,
+                scope: "claude".to_string(),
+                base_generation: published.generation.clone(),
+                query: "alpha".to_string(),
+                result: Ok(vec![1]),
+            },
+        );
+        assert_eq!(app.sessions.project_filter_active, Some(current_request));
+
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ProjectFilterBuilt {
+                request_id: current_request,
+                scope_epoch,
+                scope: "claude".to_string(),
+                base_generation: published.generation,
+                query: "beta".to_string(),
+                result: Ok(vec![2]),
+            },
+        );
+
+        assert!(app.sessions.project_filter_active.is_none());
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SessionProjectPicker(picker)
+                if picker.filtered_indices.as_deref() == Some([2].as_slice())
+        ));
+
+        let covered_request = app.sessions.start_project_filter().expect("covered filter");
+        app.open_help(&UiData::default());
+        assert!(matches!(app.overlay, Overlay::Help(_)));
+        let base_generation = app
+            .sessions
+            .base_manifest
+            .as_ref()
+            .expect("base manifest")
+            .generation
+            .clone();
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ProjectFilterBuilt {
+                request_id: covered_request,
+                scope_epoch,
+                scope: "claude".to_string(),
+                base_generation,
+                query: "beta".to_string(),
+                result: Ok(vec![1]),
+            },
+        );
+        assert!(app.sessions.project_filter_active.is_none());
+        app.close_overlay();
+        assert!(matches!(
+            &app.overlay,
+            Overlay::SessionProjectPicker(picker)
+                if picker.filtered_indices.as_deref() == Some([1].as_slice())
+        ));
+    }
+
+    #[test]
+    fn base_change_requeues_project_catalog_while_help_covers_picker() {
+        let mut app = App::new(Some(AppType::Claude));
+        let initial = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ManifestPublished {
+                request_id: initial,
+                scope_epoch,
+                scope: "claude".to_string(),
+                result: Ok(published("base-1", 1, vec![session("claude", "one", 1)])),
+            },
+        );
+        app.overlay =
+            Overlay::SessionProjectPicker(crate::cli::tui::app::SessionProjectPickerState {
+                input: TextInput::new(""),
+                selected_idx: 0,
+                path_scroll: 0,
+                filtered_indices: None,
+                pinned_scope: None,
+                filter_error: None,
+            });
+        app.open_help(&UiData::default());
+        assert!(matches!(app.overlay, Overlay::Help(_)));
+        assert!(matches!(
+            app.pending_overlay.as_ref(),
+            Some(Overlay::SessionProjectPicker(_))
+        ));
+        app.pending_project_catalog = false;
+
+        let refresh = app.sessions.start_scan("claude".to_string());
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ManifestPublished {
+                request_id: refresh,
+                scope_epoch,
+                scope: "claude".to_string(),
+                result: Ok(published("base-2", 1, vec![session("claude", "two", 2)])),
+            },
+        );
+
+        assert!(app.pending_project_catalog);
+    }
+
+    #[test]
     fn stale_session_scan_result_is_ignored() {
         let mut app = App::new(Some(AppType::Claude));
         let stale_id = app.sessions.start_scan("claude".to_string());
@@ -1894,7 +2159,9 @@ mod tests {
                 scope_epoch,
                 scope: "claude".to_string(),
                 base_generation,
-                query: "needle".to_string(),
+                view: crate::session_manager::project_scope::SessionViewSpec::all_projects(
+                    "needle",
+                ),
                 query_namespace,
                 result: Ok(published("query-1", 1, vec![content_only])),
             },
@@ -1910,6 +2177,138 @@ mod tests {
             app.sessions.page_token().map(|token| token.source),
             Some(crate::cli::tui::app::SessionPageSource::Query)
         );
+    }
+
+    #[test]
+    fn failed_materialization_is_gated_until_an_explicit_retry_boundary() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = crate::cli::tui::route::Route::Sessions;
+        let initial = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ManifestPublished {
+                request_id: initial,
+                scope_epoch,
+                scope: "claude".to_string(),
+                result: Ok(published("base", 1, vec![session("claude", "base", 1)])),
+            },
+        );
+        app.filter.input.set("needle");
+        app.sessions.deep_search_query = Some("needle".to_string());
+        app.sessions.deep_search_seq = 7;
+        app.sessions.deep_search_active = Some(7);
+        let base_generation = app
+            .sessions
+            .base_manifest
+            .as_ref()
+            .expect("base manifest")
+            .generation
+            .clone();
+        let view = crate::session_manager::project_scope::SessionViewSpec::all_projects("needle");
+        let query_namespace = app.sessions.query_namespace.clone();
+        let tombstone_key = crate::cli::tui::app::session_key(&app.sessions.rows[0]);
+        app.sessions
+            .register_purge_tombstone(99, tombstone_key.clone());
+        app.sessions
+            .mark_query_tombstone_for_rebuild(99, tombstone_key);
+
+        handle_session_msg(
+            &mut app,
+            SessionMsg::QueryPublished {
+                request_id: 7,
+                scope_epoch,
+                scope: "claude".to_string(),
+                base_generation,
+                view: view.clone(),
+                query_namespace,
+                result: Err("query manifest is not writable".to_string()),
+            },
+        );
+
+        assert!(app.sessions.materialization_failed_for_current_base(&view));
+        assert!(!app.sessions.purge_refresh_required());
+        assert_eq!(
+            app.sessions.last_error.as_deref(),
+            Some("query manifest is not writable")
+        );
+        for _ in 0..20 {
+            queue_current_session_view(&mut app);
+        }
+        assert!(app.pending_deep_search.is_none());
+
+        app.sessions.start_scan("claude".to_string());
+        assert!(
+            !app.sessions.materialization_failed_for_current_base(&view),
+            "explicit refresh reopens the retry gate"
+        );
+    }
+
+    #[test]
+    fn stale_query_result_does_not_cancel_the_newer_materialization() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = crate::cli::tui::route::Route::Sessions;
+        let initial = app.sessions.start_scan("claude".to_string());
+        let scope_epoch = app.sessions.scope_epoch;
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ManifestPublished {
+                request_id: initial,
+                scope_epoch,
+                scope: "claude".to_string(),
+                result: Ok(published("base-1", 1, vec![session("claude", "base", 1)])),
+            },
+        );
+        let stale_base_generation = app
+            .sessions
+            .base_manifest
+            .as_ref()
+            .expect("initial base")
+            .generation
+            .clone();
+        app.filter.input.set("needle");
+        app.sessions.deep_search_query = Some("needle".to_string());
+
+        let refresh = app.sessions.start_scan("claude".to_string());
+        handle_session_msg(
+            &mut app,
+            SessionMsg::ManifestPublished {
+                request_id: refresh,
+                scope_epoch,
+                scope: "claude".to_string(),
+                result: Ok(published(
+                    "base-2",
+                    1,
+                    vec![session("claude", "new-base", 2)],
+                )),
+            },
+        );
+        app.pending_deep_search = None;
+        app.sessions.deep_search_pending = None;
+        app.sessions.deep_search_active = Some(8);
+        let query_namespace = app.sessions.query_namespace.clone();
+        let view = crate::session_manager::project_scope::SessionViewSpec::all_projects("needle");
+
+        handle_session_msg(
+            &mut app,
+            SessionMsg::QueryPublished {
+                request_id: 7,
+                scope_epoch,
+                scope: "claude".to_string(),
+                base_generation: stale_base_generation,
+                view,
+                query_namespace,
+                result: Ok(published(
+                    "stale-query",
+                    1,
+                    vec![session("claude", "stale", 1)],
+                )),
+            },
+        );
+
+        assert_eq!(app.sessions.deep_search_active, Some(8));
+        assert!(app.pending_deep_search.is_none());
+        assert!(app.sessions.deep_search_pending.is_none());
     }
 
     #[test]
@@ -1944,7 +2343,9 @@ mod tests {
                 scope_epoch,
                 scope: "claude".to_string(),
                 base_generation,
-                query: "needle".to_string(),
+                view: crate::session_manager::project_scope::SessionViewSpec::all_projects(
+                    "needle",
+                ),
                 query_namespace,
                 result: Ok(published(
                     "query-1",
@@ -2133,7 +2534,9 @@ mod tests {
                 scope_epoch,
                 scope: "claude".to_string(),
                 base_generation,
-                query: "needle".to_string(),
+                view: crate::session_manager::project_scope::SessionViewSpec::all_projects(
+                    "needle",
+                ),
                 query_namespace,
                 result: Ok(published(
                     "query",
@@ -2186,7 +2589,9 @@ mod tests {
                 scope_epoch,
                 scope: "claude".to_string(),
                 base_generation: rebuilt_base_generation,
-                query: "needle".to_string(),
+                view: crate::session_manager::project_scope::SessionViewSpec::all_projects(
+                    "needle",
+                ),
                 query_namespace,
                 result: Ok(published(
                     "query-rebuilt",

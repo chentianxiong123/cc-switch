@@ -12,6 +12,7 @@ use chrono::{Local, TimeZone};
 use super::paged_manifest::{
     ManifestError, ManifestReader, PublishedManifest, QueryManifestBuilder,
 };
+use super::project_scope::SessionViewSpec;
 use super::{search_sessions_in_cancellable, SessionMeta, SessionSearchHit};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -42,24 +43,61 @@ impl SessionIdentity {
 /// Build and atomically publish a filtered manifest from a generation-pinned
 /// base reader. Cancellation returns [`ManifestError::Cancelled`]; dropping the
 /// builder removes its staging directory and leaves the current pointer intact.
+#[cfg(test)]
 pub(crate) fn build_query_manifest(
     base: &ManifestReader,
     query: &str,
-    mut builder: QueryManifestBuilder,
+    builder: QueryManifestBuilder,
     is_cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<PublishedManifest, ManifestError> {
+    build_view_manifest(
+        base,
+        &SessionViewSpec::all_projects(query),
+        builder,
+        is_cancelled,
+    )
+}
+
+/// Build a project-scoped Sessions view from a generation-pinned base. Project
+/// membership is checked before full-text candidates are cloned or dispatched,
+/// so transcript readers never see rows from another project.
+pub(crate) fn build_view_manifest(
+    base: &ManifestReader,
+    spec: &SessionViewSpec,
+    builder: QueryManifestBuilder,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+) -> Result<PublishedManifest, ManifestError> {
+    build_view_manifest_with_search(
+        base,
+        spec,
+        builder,
+        is_cancelled,
+        search_sessions_in_cancellable,
+    )
+}
+
+fn build_view_manifest_with_search<F>(
+    base: &ManifestReader,
+    spec: &SessionViewSpec,
+    mut builder: QueryManifestBuilder,
+    is_cancelled: &(dyn Fn() -> bool + Sync),
+    mut search_content: F,
+) -> Result<PublishedManifest, ManifestError>
+where
+    F: FnMut(&[SessionMeta], &str, &(dyn Fn() -> bool + Sync)) -> Option<Vec<SessionSearchHit>>,
+{
     if builder.base_scope() != base.scope() || builder.base_generation() != base.generation() {
         return Err(ManifestError::InvalidOptions(
-            "query builder does not belong to the supplied base generation".to_string(),
+            "view builder does not belong to the supplied base generation".to_string(),
         ));
     }
-    let query = query.trim().to_lowercase();
+    let query = spec.query.trim().to_lowercase();
 
     for page_index in 0..base.page_count() {
         ensure_active(&builder, is_cancelled)?;
         let page = base.load_page(page_index).ok_or_else(|| {
             ManifestError::Corrupt(format!(
-                "query source page {page_index} is unreadable in generation {}",
+                "view source page {page_index} is unreadable in generation {}",
                 base.generation()
             ))
         })?;
@@ -68,6 +106,9 @@ pub(crate) fn build_query_manifest(
         let mut content_candidates = Vec::with_capacity(page.rows.len());
         for row in &page.rows {
             ensure_active(&builder, is_cancelled)?;
+            if !spec.project.matches(row.project_dir.as_deref()) {
+                continue;
+            }
             if query.is_empty() || session_metadata_matches(row, &query) {
                 matched.insert(SessionIdentity::from_row(row));
             } else {
@@ -76,7 +117,7 @@ pub(crate) fn build_query_manifest(
         }
 
         if !content_candidates.is_empty() {
-            let hits = search_sessions_in_cancellable(&content_candidates, &query, is_cancelled)
+            let hits = search_content(&content_candidates, &query, is_cancelled)
                 .ok_or(ManifestError::Cancelled)?;
             ensure_active(&builder, is_cancelled)?;
             matched.extend(hits.into_iter().map(SessionIdentity::from_hit));
@@ -164,6 +205,7 @@ fn path_basename(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use tempfile::TempDir;
@@ -172,6 +214,7 @@ mod tests {
     use crate::session_manager::paged_manifest::{
         PagedManifestStore, QueryManifestNamespace, QueryManifestStore, PAGE_SIZE,
     };
+    use crate::session_manager::project_scope::SessionProjectScope;
 
     fn stores() -> (TempDir, PagedManifestStore, QueryManifestStore) {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -418,6 +461,98 @@ mod tests {
         assert_eq!(
             collect_ids(&query_store.open_reader("codex").expect("current query")),
             vec!["beta"]
+        );
+    }
+
+    #[test]
+    fn exact_project_view_distinguishes_prefixes_and_subdirectories() {
+        let (_temp, store, query_store) = stores();
+        let mut exact = meta("exact", 30, "match", "/missing/exact.jsonl".to_string());
+        exact.project_dir = Some("/repo/foo/./".to_string());
+        let mut prefix = meta("prefix", 20, "match", "/missing/prefix.jsonl".to_string());
+        prefix.project_dir = Some("/repo/foo-old".to_string());
+        let mut child = meta("child", 10, "match", "/missing/child.jsonl".to_string());
+        child.project_dir = Some("/repo/foo/subdir".to_string());
+        let base = publish_base(&store, [exact, prefix, child]);
+        let builder = query_store.begin_build(&base).expect("view builder");
+        let spec = SessionViewSpec::new(
+            SessionProjectScope::exact("/repo/foo").expect("exact project"),
+            "match",
+        );
+
+        build_view_manifest(&base, &spec, builder, &|| false).expect("publish view");
+        let view = query_store.open_reader("codex").expect("view reader");
+
+        assert_eq!(collect_ids(&view), vec!["exact"]);
+    }
+
+    #[test]
+    fn unknown_project_view_includes_only_rows_without_a_usable_directory() {
+        let (_temp, store, query_store) = stores();
+        let mut missing = meta("missing", 30, "match", "/missing/missing.jsonl".to_string());
+        missing.project_dir = None;
+        let mut blank = meta("blank", 20, "match", "/missing/blank.jsonl".to_string());
+        blank.project_dir = Some("\r\n".to_string());
+        let mut known = meta("known", 10, "match", "/missing/known.jsonl".to_string());
+        known.project_dir = Some("/repo/foo".to_string());
+        let base = publish_base(&store, [missing, blank, known]);
+        let builder = query_store.begin_build(&base).expect("view builder");
+        let spec = SessionViewSpec::new(SessionProjectScope::Unknown, "match");
+
+        build_view_manifest(&base, &spec, builder, &|| false).expect("publish view");
+        let view = query_store.open_reader("codex").expect("view reader");
+
+        assert_eq!(collect_ids(&view), vec!["missing", "blank"]);
+    }
+
+    #[test]
+    fn project_filter_runs_before_any_transcript_search() {
+        let (_temp, store, query_store) = stores();
+        let mut inside = meta(
+            "inside",
+            20,
+            "plain title",
+            "/sentinel/inside.jsonl".to_string(),
+        );
+        inside.project_dir = Some("/repo/foo".to_string());
+        let mut outside = meta(
+            "outside",
+            10,
+            "plain title",
+            "/sentinel/outside-must-not-be-read.jsonl".to_string(),
+        );
+        outside.project_dir = Some("/repo/bar".to_string());
+        let base = publish_base(&store, [inside, outside]);
+        let builder = query_store.begin_build(&base).expect("view builder");
+        let spec = SessionViewSpec::new(
+            SessionProjectScope::exact("/repo/foo").expect("exact project"),
+            "needle",
+        );
+        let searched_paths = RefCell::new(Vec::new());
+        let search = |candidates: &[SessionMeta],
+                      _query: &str,
+                      _is_cancelled: &(dyn Fn() -> bool + Sync)| {
+            let mut hits = Vec::new();
+            for candidate in candidates {
+                let source_path = candidate.source_path.clone().expect("source path");
+                searched_paths.borrow_mut().push(source_path.clone());
+                hits.push(SessionSearchHit {
+                    provider_id: candidate.provider_id.clone(),
+                    session_id: candidate.session_id.clone(),
+                    source_path,
+                    snippets: Vec::new(),
+                });
+            }
+            Some(hits)
+        };
+
+        build_view_manifest_with_search(&base, &spec, builder, &|| false, search)
+            .expect("publish view");
+
+        assert_eq!(searched_paths.into_inner(), vec!["/sentinel/inside.jsonl"]);
+        assert_eq!(
+            collect_ids(&query_store.open_reader("codex").expect("view reader")),
+            vec!["inside"]
         );
     }
 }

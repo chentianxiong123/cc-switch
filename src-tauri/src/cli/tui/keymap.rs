@@ -630,7 +630,7 @@ pub(crate) mod sessions {
         Restore,
         Delete,
         Refresh,
-        ShowAll,
+        Project,
     }
 
     pub(crate) const BINDINGS: &[Binding<Intent>] = &[
@@ -663,10 +663,10 @@ pub(crate) mod sessions {
             shown: |_, _| true,
         },
         Binding {
-            display: "a",
-            keys: &[KeyCode::Char('a')],
-            intent: Intent::ShowAll,
-            label: show_all_label,
+            display: "p",
+            keys: &[KeyCode::Char('p')],
+            intent: Intent::Project,
+            label: |_, _| texts::tui_key_sessions_project(),
             shown: |_, _| true,
         },
     ];
@@ -682,19 +682,12 @@ pub(crate) mod sessions {
     pub(crate) fn help_items(app: &App, data: &UiData) -> Vec<(&'static str, &'static str)> {
         super::help_items(BINDINGS, app, data)
     }
-
-    fn show_all_label(app: &App, _: &UiData) -> &'static str {
-        if app.sessions.show_all_providers {
-            texts::tui_key_sessions_all_active()
-        } else {
-            texts::tui_key_sessions_all()
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::providers::{self, Intent};
+    use super::sessions;
     use crossterm::event::KeyCode;
 
     #[test]
@@ -756,5 +749,14 @@ mod tests {
             );
             seen.push(binding.intent);
         }
+    }
+
+    #[test]
+    fn sessions_a_is_not_a_registered_action() {
+        assert_eq!(sessions::intent_for(KeyCode::Char('a')), None);
+        assert_eq!(
+            sessions::intent_for(KeyCode::Char('p')),
+            Some(sessions::Intent::Project)
+        );
     }
 }

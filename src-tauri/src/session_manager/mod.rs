@@ -4,6 +4,7 @@ pub mod cache;
     reason = "page-manifest integration is staged independently from its storage primitive"
 )]
 pub mod paged_manifest;
+pub(crate) mod project_scope;
 pub mod providers;
 pub(crate) mod query_manifest;
 pub mod recent_snapshot;

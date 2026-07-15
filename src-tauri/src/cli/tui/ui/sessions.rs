@@ -12,8 +12,8 @@ pub(super) fn render_sessions(
     let visible = app::visible_sessions_for_state(
         &app.filter,
         &app.app_type,
-        app.sessions.show_all_providers,
         app.sessions.provider_id.as_deref(),
+        &app.sessions.project_scope,
         &app.sessions.rows,
         app.sessions.detail_key.as_deref(),
         app.sessions.messages_loaded,
@@ -21,22 +21,21 @@ pub(super) fn render_sessions(
         app.sessions.deep_search_query.as_deref(),
         &app.sessions.deep_search_results,
         app.sessions
-            .materialized_query_is_current(app.filter.query_lower().as_deref()),
+            .materialized_view_is_current(app.filter.query_lower().as_deref()),
         app.sessions.rows_revision,
         app.sessions.messages_revision,
         app.sessions.deep_search_seq,
         &app.sessions.visibility_cache,
     );
 
-    // Pane/list navigation is handled globally (arrows, h/l, Tab), so it is
-    // hinted here as a static prefix; the action chips are generated from the
-    // same table the handler dispatches through.
+    // Only primary navigation is shown here. h/l remain documented aliases in
+    // contextual help; the action chips come from the dispatch keymap.
     let mut keys = vec![
         ("↑↓", texts::tui_key_select()),
-        ("←→/h/l", texts::tui_key_pane()),
+        ("←→", texts::tui_key_pane()),
     ];
     keys.extend(crate::cli::tui::keymap::sessions::key_bar_items(app, data));
-    let summary = if app.sessions.loading && !app.sessions.loaded_once {
+    let status = if app.sessions.loading && !app.sessions.loaded_once {
         texts::tui_sessions_loading_summary().to_string()
     } else if app.sessions.deep_search_active.is_some() {
         // Show spinner animation while deep search is running
@@ -46,8 +45,10 @@ pub(super) fn render_sessions(
             2 => "⠹",
             _ => "⠸",
         };
-        let query = app.sessions.deep_search_query.as_deref().unwrap_or("");
-        format!("{spinner} {}", texts::tui_sessions_searching(query))
+        match app.sessions.deep_search_query.as_deref() {
+            Some(query) => format!("{spinner} {}", texts::tui_sessions_searching(query)),
+            None => format!("{spinner} {}", texts::tui_sessions_project_filtering()),
+        }
     } else if app.sessions.loading {
         // Stale-while-revalidate: a cached snapshot is on screen (loaded_once) and
         // interactive, but the background revalidating scan is still running. Keep
@@ -65,6 +66,29 @@ pub(super) fn render_sessions(
     } else {
         texts::tui_sessions_summary(app.sessions.logical_total_rows(), visible.len())
     };
+    let provider = crate::cli::tui::runtime_actions::app_display_name(&app.app_type);
+    let project = match &app.sessions.project_scope {
+        crate::session_manager::project_scope::SessionProjectScope::All => {
+            texts::tui_sessions_all_projects()
+        }
+        crate::session_manager::project_scope::SessionProjectScope::Unknown => {
+            texts::tui_sessions_unknown_project()
+        }
+        crate::session_manager::project_scope::SessionProjectScope::Exact {
+            display_path, ..
+        } => display_path.as_str(),
+    };
+    let summary_width = area.width.saturating_sub(8).max(1);
+    let fixed = texts::tui_sessions_scope_summary(provider, "", &status);
+    let project_width = summary_width
+        .saturating_sub(UnicodeWidthStr::width(fixed.as_str()) as u16)
+        .saturating_add(1)
+        .max(5);
+    let project = truncate_path_middle(project, project_width);
+    let summary = truncate_to_display_width(
+        &texts::tui_sessions_scope_summary(provider, &project, &status),
+        summary_width,
+    );
     let frame_body = render_page_frame(
         frame,
         area,
@@ -201,20 +225,10 @@ fn render_session_list(
         return;
     }
 
-    let show_all = app.sessions.show_all_providers;
-
-    let header = if show_all {
-        Row::new(vec![
-            Cell::from("Provider"),
-            Cell::from(texts::tui_sessions_header_title()),
-            Cell::from(texts::tui_sessions_header_time()),
-        ])
-    } else {
-        Row::new(vec![
-            Cell::from(texts::tui_sessions_header_title()),
-            Cell::from(texts::tui_sessions_header_time()),
-        ])
-    }
+    let header = Row::new(vec![
+        Cell::from(texts::tui_sessions_header_title()),
+        Cell::from(texts::tui_sessions_header_time()),
+    ])
     .style(Style::default().fg(theme.dim).add_modifier(Modifier::BOLD));
 
     // Only build Row objects for the rows actually on screen. Without this the
@@ -239,11 +253,18 @@ fn render_session_list(
                 .or(session.created_at)
                 .map(|timestamp| format_relative_time(timestamp, app.sessions.time_anchor_ms))
                 .unwrap_or_else(|| texts::tui_na().to_string());
-            let project = session
-                .project_dir
-                .as_deref()
-                .map(path_basename)
-                .filter(|value| !value.is_empty());
+            let project = matches!(
+                app.sessions.project_scope,
+                crate::session_manager::project_scope::SessionProjectScope::All
+            )
+            .then(|| {
+                session
+                    .project_dir
+                    .as_deref()
+                    .map(path_basename)
+                    .filter(|value| !value.is_empty())
+            })
+            .flatten();
             let title_line = match project {
                 Some(project) => Line::from(vec![
                     Span::raw(title),
@@ -251,33 +272,14 @@ fn render_session_list(
                 ]),
                 None => Line::raw(title),
             };
-            if show_all {
-                Row::new(vec![
-                    Cell::from(session.provider_id.clone()),
-                    Cell::from(title_line),
-                    Cell::from(time),
-                ])
-            } else {
-                Row::new(vec![Cell::from(title_line), Cell::from(time)])
-            }
+            Row::new(vec![Cell::from(title_line), Cell::from(time)])
         });
 
-    let table = if show_all {
-        Table::new(
-            rows,
-            [
-                Constraint::Length(10),
-                Constraint::Percentage(62),
-                Constraint::Length(12),
-            ],
-        )
-    } else {
-        Table::new(rows, [Constraint::Percentage(72), Constraint::Length(12)])
-    }
-    .header(header)
-    .block(Block::default().borders(Borders::NONE))
-    .row_highlight_style(selection_style(theme))
-    .highlight_symbol(highlight_symbol(theme));
+    let table = Table::new(rows, [Constraint::Percentage(72), Constraint::Length(12)])
+        .header(header)
+        .block(Block::default().borders(Borders::NONE))
+        .row_highlight_style(selection_style(theme))
+        .highlight_symbol(highlight_symbol(theme));
 
     // The rows are pre-sliced to the window, so the highlight index is relative
     // to `start`.
@@ -569,6 +571,46 @@ fn path_basename(path: &str) -> String {
         .to_string()
 }
 
+fn truncate_path_middle(path: &str, width: u16) -> String {
+    let width = width as usize;
+    if width == 0 {
+        return String::new();
+    }
+    let path = bounded_trimmed_text_for_display(path);
+    if UnicodeWidthStr::width(path.as_str()) <= width {
+        return path;
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+
+    let prefix_budget = (width - 1) / 3;
+    let suffix_budget = width - 1 - prefix_budget;
+    let mut prefix = String::new();
+    let mut prefix_width = 0usize;
+    for ch in path.chars() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if prefix_width.saturating_add(char_width) > prefix_budget {
+            break;
+        }
+        prefix.push(ch);
+        prefix_width = prefix_width.saturating_add(char_width);
+    }
+
+    let mut suffix = Vec::new();
+    let mut suffix_width = 0usize;
+    for ch in path.chars().rev() {
+        let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if suffix_width.saturating_add(char_width) > suffix_budget {
+            break;
+        }
+        suffix.push(ch);
+        suffix_width = suffix_width.saturating_add(char_width);
+    }
+    suffix.reverse();
+    format!("{prefix}…{}", suffix.into_iter().collect::<String>())
+}
+
 fn format_timestamp(timestamp_ms: i64) -> String {
     Local
         .timestamp_millis_opt(timestamp_ms)
@@ -709,6 +751,15 @@ mod tests {
             ..titled
         };
         assert_eq!(session_title(&fallback), "abcdef12");
+    }
+
+    #[test]
+    fn project_paths_keep_their_basename_when_narrow() {
+        let value = truncate_path_middle("/very/long/workspace/repository", 18);
+
+        assert!(value.starts_with("/very"));
+        assert!(value.ends_with("repository"));
+        assert!(UnicodeWidthStr::width(value.as_str()) <= 18);
     }
 
     #[test]

@@ -12,6 +12,70 @@ fn model_fetch_model_index(
     (model_index < models_len).then_some(model_index)
 }
 
+const SESSION_PROJECT_PICKER_PAGE_STEP: usize = 8;
+const SESSION_PROJECT_FILTER_MAX_CHARS: usize = 256;
+const SESSION_PROJECT_PATH_SCROLL_STEP: usize = 8;
+
+fn project_path_scroll_right(path: &str, current: usize) -> usize {
+    if current == usize::MAX || path.is_empty() {
+        return current;
+    }
+    let mut start = current.min(path.len());
+    while start > 0 && !path.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut used = 0usize;
+    let mut next = start;
+    for (offset, ch) in path[start..].char_indices() {
+        next = start + offset + ch.len_utf8();
+        used = used.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(1).max(1));
+        if used >= SESSION_PROJECT_PATH_SCROLL_STEP {
+            break;
+        }
+    }
+    if next >= path.len() {
+        usize::MAX
+    } else {
+        next
+    }
+}
+
+fn project_path_scroll_left(path: &str, current: usize) -> usize {
+    if current == 0 || path.is_empty() {
+        return 0;
+    }
+    let mut end = if current == usize::MAX {
+        path.len()
+    } else {
+        current.min(path.len())
+    };
+    while end > 0 && !path.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut used = 0usize;
+    let mut start = end;
+    for (offset, ch) in path[..end].char_indices().rev() {
+        start = offset;
+        used = used.saturating_add(UnicodeWidthChar::width(ch).unwrap_or(1).max(1));
+        if used >= SESSION_PROJECT_PATH_SCROLL_STEP {
+            break;
+        }
+    }
+    start
+}
+
+fn session_project_option_index(
+    option_count: usize,
+    filtered_indices: Option<&[usize]>,
+    selected_idx: usize,
+) -> Option<usize> {
+    let option_index = match filtered_indices {
+        Some(indices) => indices.get(selected_idx).copied()?,
+        None => selected_idx,
+    };
+    (option_index < option_count).then_some(option_index)
+}
+
 impl App {
     pub(super) fn handle_picker_overlay_key(
         &mut self,
@@ -46,6 +110,9 @@ impl App {
             return Some(action);
         }
         if let Some(action) = self.handle_model_fetch_picker_key(key) {
+            return Some(action);
+        }
+        if let Some(action) = self.handle_session_project_picker_key(key) {
             return Some(action);
         }
         if let Some(action) = self.handle_openclaw_tools_profile_picker_key(key, data) {
@@ -837,6 +904,163 @@ impl App {
                     }
                 }
                 Action::None
+            }
+        })
+    }
+
+    fn handle_session_project_picker_key(&mut self, key: KeyEvent) -> Option<Action> {
+        let Overlay::SessionProjectPicker(picker) = &mut self.overlay else {
+            return None;
+        };
+
+        let option_count = session_project_option_count(&self.sessions, picker);
+        let filtered_len = picker
+            .filtered_indices
+            .as_ref()
+            .map_or(option_count, Vec::len);
+
+        Some(match key.code {
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::End if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                picker.path_scroll = usize::MAX;
+                Action::None
+            }
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                picker.path_scroll = session_project_option_at(
+                    &self.sessions,
+                    picker,
+                    session_project_option_index(
+                        option_count,
+                        picker.filtered_indices.as_deref(),
+                        picker.selected_idx,
+                    )
+                    .unwrap_or(0),
+                )
+                .and_then(|option| match option {
+                    SessionProjectOption::Exact { display_path, .. } => {
+                        Some(project_path_scroll_left(display_path, picker.path_scroll))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(0);
+                Action::None
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                picker.path_scroll = session_project_option_at(
+                    &self.sessions,
+                    picker,
+                    session_project_option_index(
+                        option_count,
+                        picker.filtered_indices.as_deref(),
+                        picker.selected_idx,
+                    )
+                    .unwrap_or(0),
+                )
+                .and_then(|option| match option {
+                    SessionProjectOption::Exact { display_path, .. } => {
+                        Some(project_path_scroll_right(display_path, picker.path_scroll))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(0);
+                Action::None
+            }
+            KeyCode::Esc => {
+                self.close_overlay();
+                Action::SessionsProjectFilterCancel
+            }
+            KeyCode::Up => {
+                picker.selected_idx = picker.selected_idx.saturating_sub(1);
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::Down => {
+                if filtered_len > 0 {
+                    picker.selected_idx =
+                        picker.selected_idx.saturating_add(1).min(filtered_len - 1);
+                }
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::PageUp => {
+                picker.selected_idx = picker
+                    .selected_idx
+                    .saturating_sub(SESSION_PROJECT_PICKER_PAGE_STEP);
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::PageDown => {
+                if filtered_len > 0 {
+                    picker.selected_idx = picker
+                        .selected_idx
+                        .saturating_add(SESSION_PROJECT_PICKER_PAGE_STEP)
+                        .min(filtered_len - 1);
+                }
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::Home => {
+                picker.selected_idx = 0;
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::End => {
+                picker.selected_idx = filtered_len.saturating_sub(1);
+                picker.path_scroll = 0;
+                Action::None
+            }
+            KeyCode::Enter => {
+                let Some(option_index) = session_project_option_index(
+                    option_count,
+                    picker.filtered_indices.as_deref(),
+                    picker.selected_idx,
+                ) else {
+                    return Some(Action::None);
+                };
+                let Some(scope) = session_project_option_at(&self.sessions, picker, option_index)
+                    .map(session_project_option_scope)
+                else {
+                    return Some(Action::None);
+                };
+                self.close_overlay();
+                Action::SessionsProjectApply { scope }
+            }
+            _ => {
+                if picker
+                    .input
+                    .apply_key_with_policy(
+                        key,
+                        TextInputPolicy {
+                            max_chars: Some(SESSION_PROJECT_FILTER_MAX_CHARS),
+                            sanitize: None,
+                        },
+                    )
+                    .is_some_and(|edit| edit.changed)
+                {
+                    let query = picker.input.value.trim().to_lowercase();
+                    picker.filter_error = None;
+                    if query.is_empty() {
+                        picker.filtered_indices = None;
+                    } else {
+                        picker.filtered_indices = Some(Vec::new());
+                    }
+                    picker.selected_idx = if query.is_empty() {
+                        session_project_active_option_index(&self.sessions, picker)
+                    } else {
+                        0
+                    };
+                    picker.path_scroll = 0;
+                    if query.is_empty() {
+                        Action::SessionsProjectFilterCancel
+                    } else {
+                        Action::SessionsProjectFilter { query }
+                    }
+                } else {
+                    Action::None
+                }
             }
         })
     }

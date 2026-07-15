@@ -1132,6 +1132,100 @@ fn failed_automatic_sessions_scan_is_not_retried_each_event_loop() {
 }
 
 #[test]
+fn returning_to_sessions_rebuilds_a_cancelled_project_view_from_the_saved_base() {
+    let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+    let store =
+        crate::session_manager::paged_manifest::PagedManifestStore::open_at(manifest_dir.path())
+            .expect("manifest fixture store");
+    let mut builder = store.begin_build("claude").expect("manifest builder");
+    builder
+        .push(crate::session_manager::SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "alpha".to_string(),
+            project_dir: Some("/repo/alpha".to_string()),
+            source_path: Some("/tmp/alpha.jsonl".to_string()),
+            ..crate::session_manager::SessionMeta::default()
+        })
+        .expect("manifest row");
+    let published = builder.publish().expect("publish manifest");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = route::Route::Sessions;
+    let _ = app.sessions.start_scan("claude".to_string());
+    let scope_epoch = app.sessions.scope_epoch;
+    assert!(app.sessions.remember_base_manifest(
+        scope_epoch,
+        "claude",
+        published.generation,
+        published.total_rows,
+        published.reader,
+    ));
+    app.sessions.scan_active = None;
+    app.sessions.loading = false;
+    app.sessions.project_scope =
+        crate::session_manager::project_scope::SessionProjectScope::exact("/repo/alpha")
+            .expect("exact project");
+    let (tx, rx) = mpsc::channel();
+
+    queue_sessions_refresh_if_needed(&mut app, Some(&tx));
+
+    assert_eq!(app.pending_deep_search.as_deref(), Some(""));
+    assert!(rx.try_recv().is_err(), "saved base avoids a redundant scan");
+    let query = app.pending_deep_search.take().expect("rebuild queued");
+    runtime_actions::queue_sessions_deep_search(&mut app, Some(&tx), query);
+    assert!(matches!(
+        rx.try_recv().expect("project view request"),
+        SessionReq::Search { view, .. }
+            if view.project == app.sessions.project_scope && view.query.is_empty()
+    ));
+}
+
+#[test]
+fn failed_session_view_is_not_requeued_on_each_event_loop() {
+    let manifest_dir = tempfile::tempdir().expect("manifest fixture directory");
+    let store =
+        crate::session_manager::paged_manifest::PagedManifestStore::open_at(manifest_dir.path())
+            .expect("manifest fixture store");
+    let mut builder = store.begin_build("claude").expect("manifest builder");
+    builder
+        .push(crate::session_manager::SessionMeta {
+            provider_id: "claude".to_string(),
+            session_id: "alpha".to_string(),
+            source_path: Some("/tmp/alpha.jsonl".to_string()),
+            ..crate::session_manager::SessionMeta::default()
+        })
+        .expect("manifest row");
+    let published = builder.publish().expect("publish manifest");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = route::Route::Sessions;
+    let _ = app.sessions.start_scan("claude".to_string());
+    let scope_epoch = app.sessions.scope_epoch;
+    let base_generation = published.generation.clone();
+    assert!(app.sessions.remember_base_manifest(
+        scope_epoch,
+        "claude",
+        published.generation,
+        published.total_rows,
+        published.reader,
+    ));
+    app.sessions.scan_active = None;
+    app.sessions.loading = false;
+    app.filter.input.set("needle");
+    let view = app.sessions.desired_view_spec(Some("needle"));
+    app.sessions
+        .mark_materialization_failed(scope_epoch, "claude", &base_generation, view);
+    let (tx, rx) = mpsc::channel();
+
+    for _ in 0..20 {
+        queue_sessions_refresh_if_needed(&mut app, Some(&tx));
+    }
+
+    assert!(app.pending_deep_search.is_none());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn unavailable_sessions_worker_is_reported_once_per_scope() {
     let mut app = App::new(Some(AppType::Claude));
     app.route = route::Route::Sessions;
@@ -1241,6 +1335,18 @@ fn switching_app_on_sessions_route_queues_scan_for_next_app() {
             .try_recv()
             .expect("app switch should cancel the old message lane"),
         SessionReq::CancelMessages
+    ));
+    assert!(matches!(
+        session_rx
+            .try_recv()
+            .expect("app switch should cancel the old project catalog lane"),
+        SessionReq::CancelProjectCatalog
+    ));
+    assert!(matches!(
+        session_rx
+            .try_recv()
+            .expect("app switch should cancel the old project filter lane"),
+        SessionReq::CancelProjectFilter
     ));
     match session_rx
         .try_recv()

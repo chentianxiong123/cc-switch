@@ -819,6 +819,15 @@ pub(crate) struct SessionBaseManifest {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct SessionProjectCatalogCache {
+    pub(crate) scope_epoch: u64,
+    pub(crate) scope: String,
+    pub(crate) base_generation: String,
+    pub(crate) catalog:
+        std::sync::Arc<crate::session_manager::project_scope::SessionProjectCatalog>,
+}
+
+#[derive(Debug, Clone)]
 struct CachedSessionPage {
     rows: Vec<crate::session_manager::SessionMeta>,
 }
@@ -905,6 +914,14 @@ pub(crate) struct SessionRemotePager {
     request_seq: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionMaterializationFailure {
+    scope_epoch: u64,
+    scope: String,
+    base_generation: String,
+    view: crate::session_manager::project_scope::SessionViewSpec,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionsState {
     pub provider_id: Option<String>,
@@ -919,8 +936,23 @@ pub struct SessionsState {
     pub(crate) remote: SessionRemotePager,
     pub(crate) pending_manifest: Option<PendingSessionManifest>,
     pub(crate) base_manifest: Option<SessionBaseManifest>,
-    pub(crate) materialized_query: Option<String>,
+    pub project_scope: crate::session_manager::project_scope::SessionProjectScope,
+    pub(crate) materialized_view: Option<crate::session_manager::project_scope::SessionViewSpec>,
+    /// Base generation from which the installed query manifest was built.
+    /// A matching project/query is still stale after a newer base is published.
+    materialized_base_generation: Option<String>,
+    /// Terminal failure for one exact desired view over one exact base. The
+    /// scheduler must not retry this identity on every UI loop; a new view,
+    /// base generation, or explicit refresh naturally creates a new attempt.
+    materialization_failure: Option<SessionMaterializationFailure>,
     pub(crate) query_namespace: crate::session_manager::paged_manifest::QueryManifestNamespace,
+    pub(crate) project_catalog: Option<SessionProjectCatalogCache>,
+    pub project_catalog_loading: bool,
+    pub project_catalog_error: Option<String>,
+    project_catalog_seq: u64,
+    pub(crate) project_catalog_active: Option<u64>,
+    project_filter_seq: u64,
+    pub(crate) project_filter_active: Option<u64>,
     /// Deletes acknowledged while a query generation remains visible. They are
     /// cleared only after that exact query is rebuilt from the newest base.
     query_tombstones_to_clear: HashMap<String, u64>,
@@ -991,9 +1023,6 @@ pub struct SessionsState {
     /// publishes. This bounds memory without permitting a deleted row to
     /// reappear from an old page.
     invalidated_tombstone_scopes: HashSet<String>,
-    /// When true, the session list shows all providers (the "全部" tab).
-    /// When false (default), only the currently selected provider is shown.
-    pub show_all_providers: bool,
     /// Deep search state: query string and results from backend full-content search.
     pub deep_search_query: Option<String>,
     pub deep_search_seq: u64,
@@ -1016,9 +1045,19 @@ impl Default for SessionsState {
             remote: SessionRemotePager::default(),
             pending_manifest: None,
             base_manifest: None,
-            materialized_query: None,
+            project_scope: crate::session_manager::project_scope::SessionProjectScope::All,
+            materialized_view: None,
+            materialized_base_generation: None,
+            materialization_failure: None,
             query_namespace:
                 crate::session_manager::paged_manifest::QueryManifestNamespace::new_unique(),
+            project_catalog: None,
+            project_catalog_loading: false,
+            project_catalog_error: None,
+            project_catalog_seq: 0,
+            project_catalog_active: None,
+            project_filter_seq: 0,
+            project_filter_active: None,
             query_tombstones_to_clear: HashMap::new(),
             manifest_reconcile_seq: 0,
             rows_revision: 0,
@@ -1057,7 +1096,6 @@ impl Default for SessionsState {
             scan_tombstones_to_clear: None,
             purge_refresh_required: false,
             invalidated_tombstone_scopes: HashSet::new(),
-            show_all_providers: false,
             deep_search_query: None,
             deep_search_seq: 0,
             deep_search_active: None,
@@ -1095,6 +1133,30 @@ pub(crate) fn retire_session_messages(messages: Vec<crate::session_manager::Sess
 
 pub(crate) fn retire_session_search_hits(hits: Vec<crate::session_manager::SessionSearchHit>) {
     retire_large_vec(hits, "cc-switch-session-search-drop");
+}
+
+fn retire_session_project_catalog(cache: SessionProjectCatalogCache) {
+    retire_large_project_value(cache.catalog.projects.len(), cache);
+}
+
+fn retire_uninstalled_session_project_catalog(
+    catalog: crate::session_manager::project_scope::SessionProjectCatalog,
+) {
+    retire_large_project_value(catalog.projects.len(), catalog);
+}
+
+/// Catalog entries own multiple path strings, so rejecting a stale worker
+/// result can be just as expensive as replacing an installed cache. Keep both
+/// ownership exits off the event-loop thread once the catalog is large.
+fn retire_large_project_value<T: Send + 'static>(project_count: usize, value: T) {
+    const BACKGROUND_DROP_THRESHOLD: usize = 4_096;
+    if project_count < BACKGROUND_DROP_THRESHOLD {
+        drop(value);
+        return;
+    }
+    let _ = std::thread::Builder::new()
+        .name("cc-switch-project-catalog-drop".to_string())
+        .spawn(move || drop(value));
 }
 
 fn retire_large_vec<T: Send + 'static>(rows: Vec<T>, thread_name: &'static str) {
@@ -1420,7 +1482,7 @@ impl SessionsState {
             && self.loaded_once
             && self.provider_id.as_deref() == Some(provider_id)
             && (self.remote.token().is_some_and(|token| {
-                token.source == SessionPageSource::Base || self.materialized_query.is_some()
+                token.source == SessionPageSource::Base || self.materialized_view.is_some()
             }) || self
                 .pending_manifest
                 .as_ref()
@@ -1519,6 +1581,11 @@ impl SessionsState {
         }) {
             return false;
         }
+        let generation_changed = self.base_manifest.as_ref().is_none_or(|current| {
+            current.scope_epoch != scope_epoch
+                || current.scope != scope
+                || current.generation != generation
+        });
         self.base_manifest = Some(SessionBaseManifest {
             scope_epoch,
             scope: scope.to_string(),
@@ -1527,6 +1594,13 @@ impl SessionsState {
             total_rows,
             reader,
         });
+        if generation_changed {
+            self.retire_project_catalog();
+            self.project_catalog_active = None;
+            self.project_catalog_loading = false;
+            self.project_catalog_error = None;
+            self.project_filter_active = None;
+        }
         true
     }
 
@@ -1551,11 +1625,218 @@ impl SessionsState {
         })
     }
 
-    pub(crate) fn materialized_query_is_current(&self, query: Option<&str>) -> bool {
+    pub(crate) fn project_catalog_is_current(&self) -> bool {
+        let Some(base) = self.base_manifest.as_ref() else {
+            return false;
+        };
+        self.project_catalog.as_ref().is_some_and(|cache| {
+            cache.scope_epoch == base.scope_epoch
+                && cache.scope == base.scope
+                && cache.base_generation == base.generation
+        })
+    }
+
+    fn retire_project_catalog(&mut self) {
+        if let Some(cache) = self.project_catalog.take() {
+            retire_session_project_catalog(cache);
+        }
+    }
+
+    pub(crate) fn start_project_catalog(&mut self) -> Option<u64> {
+        let base = self.base_manifest.as_ref()?;
+        if base.scope_epoch != self.scope_epoch
+            || self.provider_id.as_deref() != Some(base.scope.as_str())
+        {
+            return None;
+        }
+        self.project_catalog_seq = self.project_catalog_seq.wrapping_add(1);
+        self.project_catalog_active = Some(self.project_catalog_seq);
+        self.project_catalog_loading = true;
+        self.project_catalog_error = None;
+        Some(self.project_catalog_seq)
+    }
+
+    pub(crate) fn finish_project_catalog(
+        &mut self,
+        request_id: u64,
+        scope_epoch: u64,
+        scope: String,
+        base_generation: String,
+        catalog: crate::session_manager::project_scope::SessionProjectCatalog,
+    ) -> bool {
+        let current_base = self.base_manifest.as_ref().is_some_and(|base| {
+            base.scope_epoch == scope_epoch
+                && base.scope == scope
+                && base.generation == base_generation
+        });
+        if self.project_catalog_active != Some(request_id)
+            || self.scope_epoch != scope_epoch
+            || !current_base
+        {
+            retire_uninstalled_session_project_catalog(catalog);
+            return false;
+        }
+        self.project_catalog_active = None;
+        self.project_catalog_loading = false;
+        self.project_catalog_error = None;
+        self.retire_project_catalog();
+        self.project_catalog = Some(SessionProjectCatalogCache {
+            scope_epoch,
+            scope,
+            base_generation,
+            catalog: std::sync::Arc::new(catalog),
+        });
+        true
+    }
+
+    pub(crate) fn fail_project_catalog(&mut self, request_id: u64, error: String) -> bool {
+        if self.project_catalog_active != Some(request_id) {
+            return false;
+        }
+        self.project_catalog_active = None;
+        self.project_catalog_loading = false;
+        self.project_catalog_error = Some(error);
+        true
+    }
+
+    pub(crate) fn cancel_project_catalog(&mut self) {
+        // The worker intentionally drops a cancelled result. Clear the UI-side
+        // request marker at the same time so a later picker open can start a
+        // fresh catalog instead of waiting forever for that dropped result.
+        self.project_catalog_active = None;
+        self.project_catalog_loading = false;
+    }
+
+    pub(crate) fn start_project_filter(&mut self) -> Option<u64> {
+        self.project_catalog_is_current().then(|| {
+            self.project_filter_seq = self.project_filter_seq.wrapping_add(1);
+            self.project_filter_active = Some(self.project_filter_seq);
+            self.project_filter_seq
+        })
+    }
+
+    pub(crate) fn finish_project_filter(
+        &mut self,
+        request_id: u64,
+        scope_epoch: u64,
+        scope: &str,
+        base_generation: &str,
+    ) -> bool {
+        let current = self.project_catalog.as_ref().is_some_and(|cache| {
+            cache.scope_epoch == scope_epoch
+                && cache.scope == scope
+                && cache.base_generation == base_generation
+                && self.project_catalog_is_current()
+        });
+        if self.project_filter_active != Some(request_id) || !current {
+            return false;
+        }
+        self.project_filter_active = None;
+        true
+    }
+
+    pub(crate) fn fail_project_filter(&mut self, request_id: u64) -> bool {
+        if self.project_filter_active != Some(request_id) {
+            return false;
+        }
+        self.project_filter_active = None;
+        true
+    }
+
+    pub(crate) fn cancel_project_filter(&mut self) {
+        self.project_filter_active = None;
+    }
+
+    pub(crate) fn set_project_scope(
+        &mut self,
+        scope: crate::session_manager::project_scope::SessionProjectScope,
+    ) -> bool {
+        if self.project_scope == scope {
+            return false;
+        }
+        self.project_scope = scope;
+        self.deep_search_active = None;
+        self.deep_search_pending = None;
+        self.materialization_failure = None;
+        // This is a desired-view transition only. Keep the installed manifest,
+        // its bounded rows, and any pending refresh owner alive until the new
+        // view is atomically installed. Local visibility applies the new scope
+        // to the old page in the meantime without losing scan/tombstone state.
+        self.selected_idx = 0;
+        self.clear_detail();
+        self.last_error = None;
+        true
+    }
+
+    pub(crate) fn desired_view_spec(
+        &self,
+        query: Option<&str>,
+    ) -> crate::session_manager::project_scope::SessionViewSpec {
+        crate::session_manager::project_scope::SessionViewSpec::new(
+            self.project_scope.clone(),
+            query.unwrap_or_default(),
+        )
+    }
+
+    pub(crate) fn desired_view_requires_materialization(&self, query: Option<&str>) -> bool {
+        !self.desired_view_spec(query).is_base_view()
+    }
+
+    pub(crate) fn materialized_view_is_current(&self, query: Option<&str>) -> bool {
+        let desired = self.desired_view_spec(query);
+        let built_from_current_base = self.base_manifest.as_ref().is_some_and(|base| {
+            self.materialized_base_generation.as_deref() == Some(base.generation.as_str())
+        });
         self.remote
             .token()
             .is_some_and(|token| token.source == SessionPageSource::Query)
-            && self.materialized_query.as_deref() == query.map(str::trim)
+            && self.materialized_view.as_ref() == Some(&desired)
+            && built_from_current_base
+    }
+
+    pub(crate) fn materialization_failed_for_current_base(
+        &self,
+        view: &crate::session_manager::project_scope::SessionViewSpec,
+    ) -> bool {
+        let Some(base) = self.base_manifest.as_ref() else {
+            return false;
+        };
+        self.materialization_failure
+            .as_ref()
+            .is_some_and(|failure| {
+                failure.scope_epoch == self.scope_epoch
+                    && failure.scope_epoch == base.scope_epoch
+                    && failure.scope == base.scope
+                    && failure.base_generation == base.generation
+                    && &failure.view == view
+            })
+    }
+
+    pub(crate) fn mark_materialization_failed(
+        &mut self,
+        scope_epoch: u64,
+        scope: &str,
+        base_generation: &str,
+        view: crate::session_manager::project_scope::SessionViewSpec,
+    ) {
+        let current_base = self.base_manifest.as_ref().is_some_and(|base| {
+            self.scope_epoch == scope_epoch
+                && base.scope_epoch == scope_epoch
+                && base.scope == scope
+                && base.generation == base_generation
+        });
+        if current_base {
+            self.materialization_failure = Some(SessionMaterializationFailure {
+                scope_epoch,
+                scope: scope.to_string(),
+                base_generation: base_generation.to_string(),
+                view,
+            });
+        }
+    }
+
+    pub(crate) fn clear_materialization_failure(&mut self) {
+        self.materialization_failure = None;
     }
 
     pub(crate) fn register_purge_tombstone(&mut self, request_id: u64, key: String) {
@@ -1716,7 +1997,9 @@ impl SessionsState {
         self.pagination.reset(0, None);
         self.pending_manifest = None;
         self.base_manifest = None;
-        self.materialized_query = None;
+        self.materialized_view = None;
+        self.materialized_base_generation = None;
+        self.materialization_failure = None;
         self.scan_active = None;
         self.loading = false;
         self.loaded_once = false;
@@ -1765,7 +2048,7 @@ impl SessionsState {
         scope_epoch: u64,
         scope: &str,
         base_generation: &str,
-        query: String,
+        view: crate::session_manager::project_scope::SessionViewSpec,
         generation: String,
         total_rows: usize,
         page_index: usize,
@@ -1783,7 +2066,7 @@ impl SessionsState {
         }
         let applied = self.apply_manifest_source(
             SessionPageSource::Query,
-            Some(query),
+            Some(view),
             scope_epoch,
             scope,
             generation,
@@ -1794,6 +2077,8 @@ impl SessionsState {
             page_index.saturating_mul(crate::session_manager::paged_manifest::PAGE_SIZE),
         );
         if applied {
+            self.materialized_base_generation = Some(base_generation.to_string());
+            self.materialization_failure = None;
             // A query accepted here was materialized from the exact current
             // base generation checked above. Switching to it therefore also
             // retires any older pinned source whose post-delete cleanup was
@@ -1840,7 +2125,7 @@ impl SessionsState {
     fn apply_manifest_source(
         &mut self,
         source: SessionPageSource,
-        materialized_query: Option<String>,
+        materialized_view: Option<crate::session_manager::project_scope::SessionViewSpec>,
         scope_epoch: u64,
         scope: &str,
         generation: String,
@@ -1891,7 +2176,11 @@ impl SessionsState {
         self.rows_revision = self.rows_revision.wrapping_add(1);
         self.loaded_once = true;
         self.last_error = None;
-        self.materialized_query = materialized_query.map(|query| query.trim().to_lowercase());
+        self.materialized_view = materialized_view;
+        if source == SessionPageSource::Base {
+            self.materialized_base_generation = None;
+            self.materialization_failure = None;
+        }
         if self.detail_key.as_deref().is_some_and(|key| {
             self.rows
                 .get(self.selected_idx)
@@ -2125,7 +2414,9 @@ impl SessionsState {
         let installed_scope = token.scope.clone();
         let completed_scan = pending.origin_scan_request_id;
         if pending.source == SessionPageSource::Base {
-            self.materialized_query = None;
+            self.materialized_view = None;
+            self.materialized_base_generation = None;
+            self.materialization_failure = None;
         }
         let selected_local = selected_local.min(rows.len().saturating_sub(1));
         let selected_absolute = page_index
@@ -2192,7 +2483,6 @@ impl SessionsState {
         // is built from that exact base, so the base installation is also a
         // safe convergence point when a query rebuild failed or was cancelled.
         clear_tombstones_on_install.extend(std::mem::take(&mut self.query_tombstones_to_clear));
-        self.materialized_query = None;
         self.pending_manifest = Some(PendingSessionManifest {
             scope_epoch: base.scope_epoch,
             origin_scan_request_id,
@@ -2206,6 +2496,22 @@ impl SessionsState {
             clear_tombstones_on_install,
         });
         true
+    }
+
+    pub(crate) fn ensure_base_restore_staged(&mut self) -> bool {
+        self.pending_manifest.is_some() || self.stage_base_restore()
+    }
+
+    pub(crate) fn base_view_is_current(&self) -> bool {
+        let Some(base) = self.base_manifest.as_ref() else {
+            return false;
+        };
+        self.remote.token().is_some_and(|token| {
+            token.source == SessionPageSource::Base
+                && token.scope_epoch == base.scope_epoch
+                && token.scope == base.scope
+                && token.generation == base.generation
+        })
     }
 
     pub(crate) fn has_query_tombstones_to_clear(&self) -> bool {
@@ -2347,13 +2653,23 @@ impl SessionsState {
             self.rows_authoritative = false;
             self.pending_manifest = None;
             self.base_manifest = None;
-            self.materialized_query = None;
+            self.materialized_view = None;
+            self.materialized_base_generation = None;
+            self.materialization_failure = None;
+            self.retire_project_catalog();
+            self.project_catalog_active = None;
+            self.project_catalog_loading = false;
+            self.project_catalog_error = None;
+            self.project_filter_active = None;
             self.deep_search_active = None;
             self.clear_deep_search_results();
             self.pagination.reset(0, None);
             self.clear_detail();
         }
         self.provider_id = Some(provider_id.clone());
+        // `start_scan` is reached only for an explicit refresh or a new
+        // convergence attempt. Either is a deliberate retry boundary.
+        self.materialization_failure = None;
         self.scan_attempted_scope = Some(provider_id.clone());
         self.time_anchor_ms = chrono::Utc::now().timestamp_millis();
         self.scan_seq = self.scan_seq.wrapping_add(1);
@@ -2387,7 +2703,10 @@ impl SessionsState {
             self.scan_accepts_previews = false;
             self.loading = false;
             self.loaded_once = true;
-            self.last_error = if self.remote.token().is_none() && self.rows.is_empty() {
+            // Provisional rows are not a durable query source. Preserve the
+            // terminal error whenever no manifest is installed so an open
+            // project picker can stop loading and explain the failure.
+            self.last_error = if self.remote.token().is_none() {
                 Some(error)
             } else {
                 None
@@ -2870,6 +3189,23 @@ impl TextInputState {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionProjectPickerState {
+    pub input: TextInput,
+    pub selected_idx: usize,
+    /// UTF-8 byte offset for the selected full-path viewport. `usize::MAX`
+    /// pins the viewport to the path suffix without measuring the whole path
+    /// on every redraw.
+    pub path_scroll: usize,
+    /// `None` means the complete catalog. Filtering is recomputed only when
+    /// the input changes, never during redraw.
+    pub filtered_indices: Option<Vec<usize>>,
+    /// Preserve the selected project in a provider scope where it currently
+    /// has zero sessions, so the picker never silently falls back to All.
+    pub pinned_scope: Option<crate::session_manager::project_scope::SessionProjectScope>,
+    pub filter_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TextViewState {
     pub title: String,
     pub lines: Vec<String>,
@@ -3005,6 +3341,7 @@ pub enum Overlay {
         /// still submit a custom model id.
         selection_active: bool,
     },
+    SessionProjectPicker(SessionProjectPickerState),
     OpenClawToolsProfilePicker {
         selected: Option<usize>,
     },
@@ -3195,6 +3532,7 @@ impl Overlay {
                 | Overlay::ManagedAccountActionPicker { .. }
                 | Overlay::ClaudeModelPicker { editing: false, .. }
                 | Overlay::HermesModelsPicker { editing: false }
+                | Overlay::SessionProjectPicker(_)
                 | Overlay::OpenClawToolsProfilePicker { .. }
                 | Overlay::OpenClawAgentsFallbackPicker { .. }
                 | Overlay::McpAppsPicker { .. }
@@ -3219,6 +3557,7 @@ impl Overlay {
             Overlay::ClaudeModelPicker { editing, .. } => *editing,
             Overlay::HermesModelsPicker { editing } => *editing,
             Overlay::ModelFetchPicker { .. } => true,
+            Overlay::SessionProjectPicker(_) => true,
             Overlay::McpEnvEntryEditor(editor) => editor.is_editing(),
             Overlay::None
             | Overlay::Help(_)
@@ -3289,6 +3628,42 @@ mod sessions_state_tests {
             .open_generation(scope, &published.generation)
             .expect("open manifest fixture reader");
         (published, reader)
+    }
+
+    #[test]
+    fn large_project_values_are_dropped_off_the_event_thread() {
+        struct DropProbe(std::sync::mpsc::Sender<std::thread::ThreadId>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                let _ = self.0.send(std::thread::current().id());
+            }
+        }
+
+        let caller = std::thread::current().id();
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::retire_large_project_value(4_096, DropProbe(tx));
+        let drop_thread = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("background project catalog drop");
+
+        assert_ne!(drop_thread, caller);
+    }
+
+    #[test]
+    fn project_scope_survives_provider_scope_changes() {
+        let mut state = SessionsState::default();
+        let project = crate::session_manager::project_scope::SessionProjectScope::exact(
+            "/workspace/cc-switch",
+        )
+        .expect("exact project scope");
+
+        assert!(state.set_project_scope(project.clone()));
+        state.start_scan("claude".to_string());
+        state.start_scan("codex".to_string());
+
+        assert_eq!(state.project_scope, project);
+        assert!(state.desired_view_requires_materialization(None));
     }
 
     #[test]
@@ -3375,7 +3750,7 @@ mod sessions_state_tests {
             scope_epoch,
             "claude",
             &base.generation,
-            "needle".to_string(),
+            crate::session_manager::project_scope::SessionViewSpec::all_projects("needle"),
             query.generation,
             query.total_rows,
             query.first_page.page_index,
@@ -3462,12 +3837,17 @@ mod sessions_state_tests {
         let (locate_id, _, _, locate_generation, _, _, _) = state
             .next_manifest_reconcile()
             .expect("refresh locate in flight");
+        let project =
+            crate::session_manager::project_scope::SessionProjectScope::exact("/repo/alpha")
+                .expect("exact project scope");
+        assert!(state.set_project_scope(project.clone()));
+        assert!(state.pending_manifest.is_some());
 
         assert!(state.apply_query_manifest(
             scope_epoch,
             "claude",
             &base.generation,
-            "needle".to_string(),
+            crate::session_manager::project_scope::SessionViewSpec::new(project, "needle"),
             query.generation,
             query.total_rows,
             query.first_page.page_index,
@@ -3491,6 +3871,71 @@ mod sessions_state_tests {
         ));
         assert!(state.scan_active.is_none());
         assert!(!state.loading);
+    }
+
+    #[test]
+    fn derived_view_is_stale_when_a_newer_base_generation_is_saved() {
+        let directory = tempfile::tempdir().expect("manifest fixture directory");
+        let base_store =
+            crate::session_manager::paged_manifest::PagedManifestStore::open_at(directory.path())
+                .expect("base manifest fixture store");
+        let query_store = crate::session_manager::paged_manifest::QueryManifestStore::open_at(
+            directory.path(),
+            &crate::session_manager::paged_manifest::QueryManifestNamespace::for_test(
+                "tui-derived-base-identity",
+            ),
+        )
+        .expect("query manifest fixture store");
+        let (base, base_reader) = publish_rows(&base_store, "claude", "base-old", 2);
+        let mut query_builder = query_store
+            .begin_build(&base_reader)
+            .expect("query fixture builder");
+        query_builder
+            .push(meta("claude", "query-row", 2))
+            .expect("query fixture row");
+        let query = query_builder.publish().expect("query fixture");
+        let view = crate::session_manager::project_scope::SessionViewSpec::new(
+            crate::session_manager::project_scope::SessionProjectScope::exact("/repo/alpha")
+                .expect("exact project"),
+            "needle",
+        );
+
+        let mut state = SessionsState::default();
+        let _ = state.start_scan("claude".to_string());
+        let scope_epoch = state.scope_epoch;
+        assert!(state.remember_base_manifest(
+            scope_epoch,
+            "claude",
+            base.generation.clone(),
+            base.total_rows,
+            base_reader,
+        ));
+        assert!(state.apply_query_manifest(
+            scope_epoch,
+            "claude",
+            &base.generation,
+            view.clone(),
+            query.generation,
+            query.total_rows,
+            query.first_page.page_index,
+            query.first_page.rows,
+            query.reader,
+        ));
+        state.project_scope = view.project.clone();
+        assert!(state.materialized_view_is_current(Some("needle")));
+
+        let (newer, newer_reader) = publish_rows(&base_store, "claude", "base-new", 3);
+        assert!(state.remember_base_manifest(
+            scope_epoch,
+            "claude",
+            newer.generation,
+            newer.total_rows,
+            newer_reader,
+        ));
+
+        assert!(!state.materialized_view_is_current(Some("needle")));
+        assert!(state.stage_base_restore());
+        assert_eq!(state.materialized_view.as_ref(), Some(&view));
     }
 
     #[test]
@@ -3848,6 +4293,25 @@ mod sessions_state_tests {
         assert!(state.rows.iter().all(|row| row.session_id != "a"));
     }
 
+    #[test]
+    fn failed_scan_with_only_provisional_rows_keeps_terminal_error() {
+        let mut state = SessionsState::default();
+        let request_id = state.start_scan("claude".to_string());
+        let scope_epoch = state.scope_epoch;
+        assert!(state.apply_provisional_page(
+            request_id,
+            scope_epoch,
+            "claude",
+            vec![meta("claude", "partial", 10)],
+        ));
+
+        state.fail_scan(request_id, "manifest publish failed".to_string());
+
+        assert_eq!(state.rows.len(), 1);
+        assert!(state.page_token().is_none());
+        assert_eq!(state.last_error.as_deref(), Some("manifest publish failed"));
+    }
+
     /// 秒开快照同样按 tombstone 过滤：删除成功后即使 stale 快照带回已删会话，也
     /// 不渲染。
     #[test]
@@ -3981,15 +4445,15 @@ mod sessions_state_tests {
             let view = crate::cli::tui::app::visible_sessions_for_state(
                 &filter,
                 &AppType::Claude,
-                false,
                 state.provider_id.as_deref(),
+                &state.project_scope,
                 &state.rows,
                 state.detail_key.as_deref(),
                 state.messages_loaded,
                 &state.messages,
                 state.deep_search_query.as_deref(),
                 &state.deep_search_results,
-                state.materialized_query_is_current(filter.query_lower().as_deref()),
+                state.materialized_view_is_current(filter.query_lower().as_deref()),
                 state.rows_revision,
                 state.messages_revision,
                 state.deep_search_seq,
@@ -4004,15 +4468,15 @@ mod sessions_state_tests {
         let view = crate::cli::tui::app::visible_sessions_for_state(
             &filter,
             &AppType::Claude,
-            false,
             state.provider_id.as_deref(),
+            &state.project_scope,
             &state.rows,
             state.detail_key.as_deref(),
             state.messages_loaded,
             &state.messages,
             state.deep_search_query.as_deref(),
             &state.deep_search_results,
-            state.materialized_query_is_current(filter.query_lower().as_deref()),
+            state.materialized_view_is_current(filter.query_lower().as_deref()),
             state.rows_revision,
             state.messages_revision,
             state.deep_search_seq,

@@ -49,9 +49,9 @@ pub(crate) use types::{
 };
 pub use types::{
     CommonSnippetViewSource, ConfirmAction, ConfirmOverlay, FilterScope, FilterState, Focus,
-    LoadingKind, ManagedAuthLoginState, Overlay, PricingState, SessionsPane, SessionsState,
-    SkillsDiscoverSource, TextInputState, TextSubmit, TextViewAction, TextViewState, Toast,
-    ToastKind, UsageMetric, UsagePane, UsageState,
+    LoadingKind, ManagedAuthLoginState, Overlay, PricingState, SessionProjectPickerState,
+    SessionsPane, SessionsState, SkillsDiscoverSource, TextInputState, TextSubmit, TextViewAction,
+    TextViewState, Toast, ToastKind, UsageMetric, UsagePane, UsageState,
 };
 #[cfg(test)]
 pub(crate) use types::{McpEnvEditorField, McpEnvEntryEditorState};
