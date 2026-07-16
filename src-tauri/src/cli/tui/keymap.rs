@@ -59,6 +59,13 @@ pub(crate) fn never(_: &super::app::App, _: &super::data::UiData) -> bool {
     false
 }
 
+/// Hide a secondary binding from the compact key bar while retaining it in
+/// the full help sheet. This differs from `never`, which hides the binding
+/// from both surfaces.
+pub(crate) fn help_only(_: &super::app::App, _: &super::data::UiData) -> bool {
+    false
+}
+
 /// (display, label) pairs for the help sheet: every binding except the
 /// `never`-shown aliases, labeled for the given app/data. Unlike
 /// `key_bar_items` this does not evaluate each binding's `shown` state, so
@@ -110,7 +117,7 @@ pub(crate) mod providers {
             keys: &[KeyCode::Enter],
             intent: Intent::Primary,
             label: primary_label,
-            shown: import_shown,
+            shown: primary_shown,
         },
         Binding {
             display: "Space",
@@ -138,7 +145,7 @@ pub(crate) mod providers {
             keys: &[KeyCode::Char('e')],
             intent: Intent::Edit,
             label: |_, _| texts::tui_key_edit(),
-            shown: selected_editable,
+            shown: super::help_only,
         },
         Binding {
             display: "d",
@@ -208,6 +215,10 @@ pub(crate) mod providers {
 
     fn import_shown(_app: &App, data: &UiData) -> bool {
         data.providers.rows.is_empty() && !data.providers.loading
+    }
+
+    fn primary_shown(app: &App, data: &UiData) -> bool {
+        import_shown(app, data) || selected_editable(app, data)
     }
 
     fn primary_label(_app: &App, data: &UiData) -> &'static str {

@@ -1551,6 +1551,26 @@ mod tests {
     }
 
     #[test]
+    fn provider_local_proxy_user_agent_picker_space_is_noop() {
+        let mut app = open_local_proxy_settings_page();
+
+        app.on_key(key(KeyCode::Enter), &data());
+        let selected = match app.overlay {
+            Overlay::UserAgentPicker { selected } => selected,
+            ref overlay => panic!("expected UserAgentPicker, got {overlay:?}"),
+        };
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::UserAgentPicker {
+                selected: current
+            } if current == selected
+        ));
+    }
+
+    #[test]
     fn provider_local_proxy_user_agent_u_shortcut_is_not_bound() {
         let mut app = open_local_proxy_settings_page();
         select_local_proxy_settings_field(&mut app, form::LocalProxySettingsField::BodyOverrides);
@@ -2230,6 +2250,23 @@ mod tests {
     }
 
     #[test]
+    fn provider_add_form_hermes_models_picker_space_does_not_start_editing() {
+        let mut app = App::new(Some(AppType::Hermes));
+        let mut form = ProviderAddFormState::new(AppType::Hermes);
+        form.open_hermes_models_picker();
+        form.add_empty_hermes_model();
+        app.form = Some(FormState::ProviderAdd(form));
+        app.overlay = Overlay::HermesModelsPicker { editing: false };
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::HermesModelsPicker { editing: false }
+        ));
+    }
+
+    #[test]
     fn provider_add_form_hermes_models_picker_preserves_edit_cursor() {
         let mut app = App::new(Some(AppType::Hermes));
         app.route = Route::Providers;
@@ -2750,6 +2787,30 @@ mod tests {
         assert!(
             matches!(app.overlay, Overlay::SpeedtestRunning { ref url } if url == "https://example.com")
         );
+    }
+
+    #[test]
+    fn provider_test_menu_space_is_noop() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        app.overlay = Overlay::ProviderTestMenu {
+            provider_id: "p1".to_string(),
+            selected: 0,
+        };
+
+        let mut data = UiData::default();
+        data.providers.rows.push(claude_provider_row("p1"));
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data);
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::ProviderTestMenu {
+                ref provider_id,
+                selected: 0
+            } if provider_id == "p1"
+        ));
     }
 
     #[test]
@@ -14467,6 +14528,41 @@ mod tests {
             Overlay::UsageQueryTemplatePicker { selected: 2 }
         ));
         assert!(app.pending_overlay.is_none());
+    }
+
+    #[test]
+    fn usage_query_template_picker_space_is_noop() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = ProviderAddFormState::new(AppType::Claude);
+        form.open_usage_query_page();
+        form.toggle_usage_query_enabled();
+        app.form = Some(FormState::ProviderAdd(form));
+        app.overlay = Overlay::UsageQueryTemplatePicker { selected: 2 };
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(
+            app.overlay,
+            Overlay::UsageQueryTemplatePicker { selected: 2 }
+        ));
+    }
+
+    #[test]
+    fn usage_query_template_picker_enter_applies_selection() {
+        let mut app = App::new(Some(AppType::Claude));
+        let mut form = ProviderAddFormState::new(AppType::Claude);
+        form.open_usage_query_page();
+        form.toggle_usage_query_enabled();
+        app.form = Some(FormState::ProviderAdd(form));
+        app.overlay = Overlay::UsageQueryTemplatePicker { selected: 2 };
+
+        let action = app.on_key(key(KeyCode::Enter), &UiData::default());
+        assert!(matches!(action, Action::None));
+        assert!(matches!(app.overlay, Overlay::None));
+        let Some(FormState::ProviderAdd(form)) = app.form.as_ref() else {
+            panic!("expected provider form");
+        };
+        assert_eq!(form.usage_query_template, UsageQueryTemplate::NewApi);
     }
 
     #[test]

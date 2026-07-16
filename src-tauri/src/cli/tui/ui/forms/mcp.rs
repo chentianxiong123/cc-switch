@@ -475,19 +475,6 @@ fn mcp_add_form_key_items(
                     _ => texts::tui_key_edit_mode(),
                 };
                 keys.extend([("↑↓", texts::tui_key_select()), ("Enter", enter_action)]);
-                match selected_field {
-                    Some(McpAddField::Type | McpAddField::Env) => {}
-                    Some(
-                        McpAddField::AppClaude
-                        | McpAddField::AppCodex
-                        | McpAddField::AppGemini
-                        | McpAddField::AppOpenCode
-                        | McpAddField::AppHermes,
-                    ) => {
-                        keys.push(("Space", texts::tui_key_toggle()));
-                    }
-                    _ => {}
-                }
             }
         }
         FormFocus::JsonPreview => {
@@ -497,4 +484,19 @@ fn mcp_add_form_key_items(
     }
 
     keys
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_toggle_key_bar_shows_enter_without_space() {
+        let keys = mcp_add_form_key_items(FormFocus::Fields, false, Some(McpAddField::AppClaude));
+
+        assert!(keys
+            .iter()
+            .any(|(key, label)| { *key == "Enter" && *label == texts::tui_key_toggle() }));
+        assert!(keys.iter().all(|(key, _)| *key != "Space"));
+    }
 }

@@ -230,7 +230,7 @@ impl App {
                 Action::None
             }
             KeyCode::Char('f') | KeyCode::Char('F') => self.build_hermes_models_fetch_action(),
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 if let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() {
                     if provider.selected_hermes_model_field().is_some() {
                         provider.sync_hermes_model_input_from_selection();
@@ -379,7 +379,7 @@ impl App {
                 *selected = (*selected + 1).min(options.len() - 1);
                 Action::None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 let template = options[*selected];
                 provider.set_usage_query_template(template);
                 provider.touch_usage_query();
@@ -410,7 +410,7 @@ impl App {
                 *selected = (*selected + 1).min(max);
                 Action::None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 let selected = *selected;
                 if selected == form::USER_AGENT_PICKER_CUSTOM_INDEX {
                     let current = self
@@ -607,7 +607,7 @@ impl App {
                 *selected = (*selected + 1).min(items.len() - 1);
                 Action::None
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
+            KeyCode::Enter => {
                 let provider_id = provider_id.clone();
                 let item = items[*selected];
                 let row = data

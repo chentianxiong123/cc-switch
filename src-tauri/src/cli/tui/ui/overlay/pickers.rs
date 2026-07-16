@@ -2119,7 +2119,7 @@ pub(super) fn render_skills_import_picker_overlay(
         theme,
         texts::tui_skills_import_title(),
         &[
-            ("Space", texts::tui_key_select()),
+            ("Space", texts::tui_key_toggle()),
             ("Enter", texts::tui_key_import()),
             ("r", texts::tui_key_refresh()),
             ("Esc", texts::tui_key_close()),

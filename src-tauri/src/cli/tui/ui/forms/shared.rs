@@ -72,22 +72,6 @@ pub(crate) fn add_form_key_items(
                 if matches!(
                     selected_field,
                     Some(
-                        ProviderAddField::ClaudeHideAttribution
-                            | ProviderAddField::ClaudeTeammates
-                            | ProviderAddField::ClaudeToolSearch
-                            | ProviderAddField::ClaudeDisableAutoUpgrade
-                            | ProviderAddField::CodexGoalMode
-                            | ProviderAddField::CodexRemoteCompaction
-                            | ProviderAddField::CodexFastMode
-                            | ProviderAddField::OpenClawUserAgent
-                            | ProviderAddField::IncludeCommonConfig
-                    )
-                ) {
-                    keys.push(("Space", texts::tui_key_toggle()));
-                }
-                if matches!(
-                    selected_field,
-                    Some(
                         ProviderAddField::CodexModel
                             | ProviderAddField::GeminiModel
                             | ProviderAddField::OpenCodeModelId
@@ -114,7 +98,6 @@ pub(crate) fn quick_config_form_key_items() -> Vec<(&'static str, &'static str)>
         ("Ctrl+S", texts::tui_key_save()),
         ("Esc", texts::tui_key_no()),
         ("↑↓", texts::tui_key_select()),
-        ("Space", texts::tui_key_toggle()),
         ("Enter", texts::tui_key_toggle()),
     ]
 }
@@ -225,9 +208,6 @@ pub(crate) fn usage_query_form_key_items(
                     None => texts::tui_key_edit_mode(),
                 };
                 keys.push(("Enter", enter_action));
-                if matches!(selected_field, Some(super::form::UsageQueryField::Enabled)) {
-                    keys.push(("Space", texts::tui_key_toggle()));
-                }
             }
         }
         FormFocus::JsonPreview => {

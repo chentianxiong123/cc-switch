@@ -30,7 +30,7 @@ use crate::{
         },
         form::{
             ClaudeModelPickerColumn, FormFocus, FormState, PromptMetaFormState, ProviderAddField,
-            TextInput,
+            TextInput, UsageQueryField,
         },
         route::{NavItem, Route},
         theme::theme_for,
@@ -11205,6 +11205,36 @@ fn provider_form_model_field_hints_enter_edit_and_f_fetch() {
 }
 
 #[test]
+fn form_toggle_key_bars_show_enter_without_space() {
+    let cases = [
+        super::add_form_key_items(
+            FormFocus::Fields,
+            false,
+            Some(ProviderAddField::IncludeCommonConfig),
+        ),
+        super::quick_config_form_key_items(),
+        super::usage_query_form_key_items(
+            FormFocus::Fields,
+            false,
+            Some(UsageQueryField::Enabled),
+            false,
+        ),
+    ];
+
+    for keys in cases {
+        assert!(
+            keys.iter()
+                .any(|(key, label)| { *key == "Enter" && *label == texts::tui_key_toggle() }),
+            "missing Enter toggle hint: {keys:?}"
+        );
+        assert!(
+            keys.iter().all(|(key, _)| *key != "Space"),
+            "form toggle should not advertise Space: {keys:?}"
+        );
+    }
+}
+
+#[test]
 fn openclaw_provider_list_key_bar_shows_test_hint_only() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
@@ -11471,7 +11501,8 @@ fn openclaw_provider_list_key_bar_shows_edit_for_tracked_provider() {
     let buf = render(&app, &minimal_data(&app.app_type));
     let all = all_text(&buf);
 
-    assert!(all.contains("e edit"), "{all}");
+    assert!(all.contains("Enter edit"), "{all}");
+    assert!(!all.contains("e edit"), "{all}");
     assert!(all.contains("x set default"), "{all}");
 }
 
@@ -11494,6 +11525,7 @@ fn hermes_provider_list_key_bar_hides_edit_delete_for_read_only_provider() {
 
     let keys = line_with(&all, "Space add/remove");
     assert!(keys.contains("t test"), "{keys}");
+    assert!(!keys.contains("Enter edit"), "{keys}");
     assert!(!keys.contains("e edit"), "{keys}");
     assert!(!keys.contains("d delete"), "{keys}");
 }
