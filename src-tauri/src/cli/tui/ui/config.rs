@@ -48,6 +48,53 @@ fn settings_table_row_index(selected_idx: usize) -> usize {
     0
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigSection {
+    Inspect,
+    Transfer,
+    Integrations,
+    Reset,
+}
+
+fn config_section(item: ConfigItem) -> ConfigSection {
+    match item {
+        ConfigItem::Path | ConfigItem::ShowFull => ConfigSection::Inspect,
+        ConfigItem::Export
+        | ConfigItem::Import
+        | ConfigItem::Backup
+        | ConfigItem::Restore
+        | ConfigItem::Validate => ConfigSection::Transfer,
+        ConfigItem::CommonSnippet
+        | ConfigItem::Proxy
+        | ConfigItem::OpenClawWorkspace
+        | ConfigItem::OpenClawEnv
+        | ConfigItem::OpenClawTools
+        | ConfigItem::OpenClawAgents
+        | ConfigItem::CloudSync => ConfigSection::Integrations,
+        ConfigItem::Reset => ConfigSection::Reset,
+    }
+}
+
+fn config_table_row_index(items: &[ConfigItem], selected_idx: usize, show_dividers: bool) -> usize {
+    let selected_idx = selected_idx.min(items.len().saturating_sub(1));
+    let mut rendered_idx = 0;
+    let mut current_section = None;
+
+    for (item_idx, item) in items.iter().copied().enumerate() {
+        let section = config_section(item);
+        if show_dividers && current_section.is_some_and(|current| current != section) {
+            rendered_idx += 1;
+        }
+        current_section = Some(section);
+        if item_idx == selected_idx {
+            return rendered_idx;
+        }
+        rendered_idx += 1;
+    }
+
+    0
+}
+
 pub(super) fn config_items_filtered(app: &App) -> Vec<ConfigItem> {
     app::visible_config_items(&app.filter, &app.app_type)
 }
@@ -97,10 +144,6 @@ pub(super) fn render_config(
     theme: &super::theme::Theme,
 ) {
     let items = config_items_filtered(app);
-    let rows = items
-        .iter()
-        .map(|item| Row::new(vec![Cell::from(config_item_label(item))]));
-
     let mut keys = vec![("Enter", texts::tui_key_select())];
     if matches!(items.get(app.config_idx), Some(ConfigItem::CommonSnippet)) {
         keys.push(("e", texts::tui_key_edit_snippet()));
@@ -114,6 +157,20 @@ pub(super) fn render_config(
         &keys,
         None,
     );
+    let table_area = inset_left(body, CONTENT_INSET_LEFT);
+    let show_dividers = app.filter.query_lower().is_none();
+    let divider_style = Style::default().fg(theme.dim);
+    let divider_rule = "─".repeat(usize::from(table_area.width));
+    let mut rows = Vec::with_capacity(items.len() + 3);
+    let mut current_section = None;
+    for item in &items {
+        let section = config_section(*item);
+        if show_dividers && current_section.is_some_and(|current| current != section) {
+            rows.push(Row::new(vec![Cell::from(divider_rule.clone())]).style(divider_style));
+        }
+        current_section = Some(section);
+        rows.push(Row::new(vec![Cell::from(config_item_label(item))]));
+    }
 
     let table = Table::new(rows, [Constraint::Min(10)])
         .block(Block::default().borders(Borders::NONE))
@@ -121,8 +178,12 @@ pub(super) fn render_config(
         .highlight_symbol(highlight_symbol(theme));
 
     let mut state = TableState::default();
-    state.select(Some(app.config_idx));
-    frame.render_stateful_widget(table, inset_left(body, CONTENT_INSET_LEFT), &mut state);
+    state.select(Some(config_table_row_index(
+        &items,
+        app.config_idx,
+        show_dividers,
+    )));
+    frame.render_stateful_widget(table, table_area, &mut state);
 }
 
 pub(super) fn render_config_webdav(

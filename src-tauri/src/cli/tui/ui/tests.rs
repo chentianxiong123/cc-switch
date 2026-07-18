@@ -4077,6 +4077,110 @@ fn settings_page_shows_managed_accounts_summary() {
 }
 
 #[test]
+fn configuration_page_groups_actions_with_three_unlabeled_dividers() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Config;
+    app.focus = Focus::Content;
+
+    let buf = render_with_size(&app, &minimal_data(&app.app_type), 100, 32);
+    let content = content_text(&app, &buf);
+    let dividers = content
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| contains_continuous_divider_row(line).then_some(idx))
+        .collect::<Vec<_>>();
+    let path = line_index(&content, texts::tui_config_item_show_path());
+    let show_full = line_index(&content, texts::tui_config_item_show_full());
+    let export = line_index(&content, texts::tui_config_item_export());
+    let validate = line_index(&content, texts::tui_config_item_validate());
+    let snippet = line_index(&content, texts::tui_config_item_common_snippet());
+    let cloud_sync = line_index(&content, texts::tui_config_item_cloud_sync());
+    let reset = line_index(&content, texts::tui_config_item_reset());
+
+    assert_eq!(dividers.len(), 3, "{content}");
+    assert!(path < show_full && show_full < dividers[0], "{content}");
+    assert!(dividers[0] < export && validate < dividers[1], "{content}");
+    assert!(
+        dividers[1] < snippet && cloud_sync < dividers[2],
+        "{content}"
+    );
+    assert!(dividers[2] < reset, "{content}");
+}
+
+#[test]
+fn configuration_page_hides_dividers_while_filtering() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::remove("NO_COLOR");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Config;
+    app.focus = Focus::Content;
+    app.filter.input.set("config".to_string());
+
+    let content = content_text(
+        &app,
+        &render_with_size(&app, &minimal_data(&app.app_type), 80, 32),
+    );
+
+    assert!(
+        content.contains(texts::tui_config_item_show_full()),
+        "{content}"
+    );
+    assert!(
+        content.contains(texts::tui_config_item_common_snippet()),
+        "{content}"
+    );
+    assert!(
+        content.contains(texts::tui_config_item_reset()),
+        "{content}"
+    );
+    assert!(
+        !content.lines().any(contains_continuous_divider_row),
+        "filtered results should not contain dividers:\n{content}"
+    );
+}
+
+#[test]
+fn configuration_dividers_do_not_shift_narrow_terminal_selection() {
+    let _lock = lock_env();
+    let _lang = use_test_language(Language::English);
+    let _no_color = EnvGuard::set("NO_COLOR", "1");
+
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Config;
+    app.focus = Focus::Content;
+    app.config_idx = super::config_items_filtered(&app)
+        .iter()
+        .position(|item| matches!(item, ConfigItem::Reset))
+        .expect("Reset missing from visible config items");
+
+    let buf = render_with_size(&app, &minimal_data(&app.app_type), 50, 18);
+    let reset_y = (0..buf.area.height)
+        .find(|y| line_at(&buf, *y).contains(texts::tui_config_item_reset()))
+        .unwrap_or_else(|| panic!("Reset should scroll into view:\n{}", all_text(&buf)));
+    let divider_y = (0..buf.area.height)
+        .filter(|y| contains_continuous_divider_row(&line_at(&buf, *y)))
+        .next_back()
+        .unwrap_or_else(|| panic!("last divider should stay visible:\n{}", all_text(&buf)));
+
+    assert!(
+        (0..buf.area.width).any(|x| buf[(x, reset_y)].modifier.contains(Modifier::REVERSED)),
+        "Reset should own the highlight:\n{}",
+        all_text(&buf)
+    );
+    assert!(
+        (0..buf.area.width).all(|x| !buf[(x, divider_y)].modifier.contains(Modifier::REVERSED)),
+        "divider rows must not be selectable:\n{}",
+        all_text(&buf)
+    );
+}
+
+#[test]
 fn settings_page_groups_items_with_unlabeled_dividers() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
