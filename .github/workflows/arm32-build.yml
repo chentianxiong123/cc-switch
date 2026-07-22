@@ -1,0 +1,49 @@
+name: ARM32 Build
+
+on:
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: 1.91.1
+
+jobs:
+  build:
+    name: Build ARM32
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: armv7-unknown-linux-gnueabihf
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            libclang-dev \
+            pkg-config
+
+      - name: Build with cross
+        working-directory: src-tauri
+        run: cross build --release --target armv7-unknown-linux-gnueabihf
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-linux-arm32
+          path: src-tauri/target/armv7-unknown-linux-gnueabihf/release/cc-switch
+          if-no-files-found: error
