@@ -110,6 +110,12 @@ jobs:
             target: x86_64-unknown-linux-gnu
             binary: cc-switch
             use_cross: false
+          # Linux x86 32 - GLIBC
+          - os: ubuntu-22.04
+            platform: linux-x86
+            target: i686-unknown-linux-gnu
+            binary: cc-switch
+            use_cross: false
           # Linux ARM64 - MUSL (recommended)
           - os: ubuntu-22.04
             platform: linux-arm64-musl
@@ -149,6 +155,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            pkg-config \
+            libssl-dev
+
+      - name: Install Linux dependencies (GLIBC x86)
+        if: runner.os == 'Linux' && matrix.target == 'i686-unknown-linux-gnu'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            gcc-multilib \
+            libc6-dev-i386 \
             pkg-config \
             libssl-dev
 
