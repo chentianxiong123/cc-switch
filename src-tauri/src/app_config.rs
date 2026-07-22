@@ -295,6 +295,7 @@ pub enum AppType {
     OpenCode,
     Hermes,
     OpenClaw,
+    Pi,
 }
 
 impl AppType {
@@ -306,13 +307,14 @@ impl AppType {
             AppType::OpenCode => "opencode",
             AppType::Hermes => "hermes",
             AppType::OpenClaw => "openclaw",
+            AppType::Pi => "pi-agent",
         }
     }
 
     pub fn is_additive_mode(&self) -> bool {
         matches!(
             self,
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi
         )
     }
 
@@ -328,6 +330,7 @@ impl AppType {
             AppType::OpenCode,
             AppType::Hermes,
             AppType::OpenClaw,
+            AppType::Pi,
         ]
         .into_iter()
     }
@@ -351,13 +354,14 @@ impl FromStr for AppType {
             "opencode" => Ok(AppType::OpenCode),
             "hermes" => Ok(AppType::Hermes),
             "openclaw" => Ok(AppType::OpenClaw),
+            "pi" => Ok(AppType::Pi),
             other => Err(AppError::localized(
                 "unsupported_app",
                 format!(
-                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw。"
+                    "不支持的应用标识: '{other}'。可选值: claude, codex, gemini, opencode, hermes, openclaw, pi。"
                 ),
                 format!(
-                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw."
+                    "Unsupported app id: '{other}'. Allowed: claude, codex, gemini, opencode, hermes, openclaw, pi."
                 ),
             )),
         }
