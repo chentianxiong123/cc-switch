@@ -205,7 +205,8 @@ enum PreparedLiveWrite {
         models: Value,
     },
     Pi {
-        config: std::collections::HashMap<String, crate::pi_config::PiProviderConfig>,
+        provider_id: String,
+        config: Value,
     },
 }
 
@@ -3036,8 +3037,8 @@ impl ProviderService {
                 Ok(PreparedLiveWrite::OpenClaw { models })
             }
             AppType::Pi => {
-                let config = crate::pi_config::get_typed_providers()?;
-                Ok(PreparedLiveWrite::Pi { config })
+                let config = provider.settings_config.clone();
+                Ok(PreparedLiveWrite::Pi { provider_id: provider.id.clone(), config })
             }
         }
     }
@@ -3061,12 +3062,8 @@ impl ProviderService {
                     .map(|_| ())
                     .map_err(Self::normalize_openclaw_live_write_error)
             }
-            PreparedLiveWrite::Pi { config } => {
-                for (id, provider_config) in config {
-                    let value = serde_json::to_value(provider_config)
-                        .map_err(|e| AppError::JsonSerialize { source: e })?;
-                    crate::pi_config::set_provider(id, value)?;
-                }
+            PreparedLiveWrite::Pi { provider_id, config } => {
+                crate::pi_config::set_provider(provider_id, config.clone())?;
                 Ok(())
             }
         }
