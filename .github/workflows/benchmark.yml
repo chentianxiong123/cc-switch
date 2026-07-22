@@ -1,20 +1,6 @@
 name: Benchmark CI
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "src-tauri/**"
-      - "scripts/benchmark_cc_switch.py"
-      - "scripts/check_benchmark_thresholds.py"
-      - ".github/workflows/benchmark.yml"
-  pull_request:
-    paths:
-      - "src-tauri/**"
-      - "scripts/benchmark_cc_switch.py"
-      - "scripts/check_benchmark_thresholds.py"
-      - ".github/workflows/benchmark.yml"
   workflow_dispatch:
 
 permissions:
