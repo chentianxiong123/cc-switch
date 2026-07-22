@@ -863,6 +863,24 @@ fn model_fetch_target(
             custom_user_agent,
             strategy: ProviderModelFetchStrategy::Bearer,
         }),
+        AppType::Pi => Ok(ModelFetchTarget {
+            base_url,
+            is_full_url,
+            auth_value: Some(
+                provider
+                    .settings_config
+                    .get("apiKey")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        AppError::Message(format!("Missing API key for provider '{}'", provider.id))
+                    })?,
+            ),
+            custom_user_agent,
+            strategy: ProviderModelFetchStrategy::Bearer,
+        }),
     }
 }
 
@@ -897,7 +915,7 @@ fn default_one_off_model_fetch_strategy(app_type: &AppType) -> ProviderModelFetc
     match app_type {
         AppType::Claude => ProviderModelFetchStrategy::Anthropic,
         AppType::Gemini => ProviderModelFetchStrategy::GoogleApiKey,
-        AppType::Codex | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => {
+        AppType::Codex | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
             ProviderModelFetchStrategy::Bearer
         }
     }

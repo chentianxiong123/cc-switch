@@ -32,6 +32,9 @@ pub(super) enum LiveSnapshot {
     OpenClaw {
         config_source: Option<String>,
     },
+    Pi {
+        config_source: Option<String>,
+    },
 }
 
 impl LiveSnapshot {
@@ -107,6 +110,14 @@ impl LiveSnapshot {
                     delete_file(&path)?;
                 }
             }
+            LiveSnapshot::Pi { config_source } => {
+                let path = crate::pi_config::get_models_path();
+                if let Some(source) = config_source {
+                    crate::config::write_text_file(&path, &source)?;
+                } else if path.exists() {
+                    delete_file(&path)?;
+                }
+            }
         }
         Ok(())
     }
@@ -173,6 +184,10 @@ pub(super) fn capture_live_snapshot(app_type: &AppType) -> Result<LiveSnapshot, 
         AppType::OpenClaw => {
             let config_source = crate::openclaw_config::read_openclaw_config_source()?;
             Ok(LiveSnapshot::OpenClaw { config_source })
+        }
+        AppType::Pi => {
+            let config_source = crate::pi_config::capture_pi_live_snapshot()?;
+            Ok(LiveSnapshot::Pi { config_source })
         }
     }
 }

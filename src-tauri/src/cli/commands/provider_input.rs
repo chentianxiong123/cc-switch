@@ -140,7 +140,7 @@ pub fn common_snippet_has_effective_config(
             .ok()
             .and_then(|value| value.as_object().cloned())
             .is_some_and(|obj| !obj.is_empty()),
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
     }
 }
 
@@ -493,6 +493,7 @@ pub fn provider_add_template_choices(app_type: &AppType) -> &'static [ProviderAd
         AppType::OpenCode => &PROVIDER_TEMPLATE_CHOICES_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_CHOICES_HERMES,
         AppType::OpenClaw => &PROVIDER_TEMPLATE_CHOICES_OPENCLAW,
+        AppType::Pi => &[],
     }
 }
 
@@ -1128,6 +1129,9 @@ fn build_sponsor_template_settings_config(
                 })
             }
         }
+        AppType::Pi => Err(AppError::Config(
+            "Pi Agent does not support sponsor templates".into(),
+        )),
     }
 }
 
@@ -3807,6 +3811,9 @@ pub fn prompt_settings_config(
         AppType::OpenCode => prompt_opencode_config(current).map(SettingsConfigPromptResult::new),
         AppType::Hermes => prompt_hermes_config(current).map(SettingsConfigPromptResult::new),
         AppType::OpenClaw => prompt_openclaw_config(current).map(SettingsConfigPromptResult::new),
+        AppType::Pi => Err(AppError::Config(
+            "Pi Agent does not support config prompting".into(),
+        )),
     }
 }
 
@@ -4585,6 +4592,26 @@ pub fn display_provider_summary(provider: &Provider, app_type: &AppType) {
                 .and_then(|v| v.as_array())
             {
                 println!("  {}: {}", texts::model_label(), models.len());
+            }
+        }
+        AppType::Pi => {
+            if let Some(api_key) = provider
+                .settings_config
+                .get("apiKey")
+                .and_then(|v| v.as_str())
+            {
+                println!(
+                    "  {}: {}",
+                    texts::api_key_display_label(),
+                    mask_api_key(api_key)
+                );
+            }
+            if let Some(base_url) = provider
+                .settings_config
+                .get("baseUrl")
+                .and_then(|v| v.as_str())
+            {
+                println!("  {}: {}", texts::base_url_display_label(), base_url);
             }
         }
     }

@@ -512,6 +512,7 @@ fn export_db_to_multi_app_config(db: &Database) -> Result<MultiAppConfig, AppErr
         AppType::OpenCode,
         AppType::Hermes,
         AppType::OpenClaw,
+        AppType::Pi,
     ] {
         let app_key = app.as_str();
         let providers = db.get_all_providers(app_key)?;
@@ -528,6 +529,7 @@ fn export_db_to_multi_app_config(db: &Database) -> Result<MultiAppConfig, AppErr
             AppType::OpenCode => config.prompts.opencode.prompts = prompts.into_iter().collect(),
             AppType::Hermes => config.prompts.hermes.prompts = prompts.into_iter().collect(),
             AppType::OpenClaw => config.prompts.openclaw.prompts = prompts.into_iter().collect(),
+            AppType::Pi => config.prompts.pi.prompts = prompts.into_iter().collect(),
         }
 
         // common snippet

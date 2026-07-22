@@ -161,6 +161,28 @@ pub fn set_typed_provider(id: &str, config: &PiProviderConfig) -> Result<(), App
     set_provider(id, value)
 }
 
+pub fn capture_pi_live_snapshot() -> Result<Option<String>, AppError> {
+    let path = get_models_path();
+    if path.exists() {
+        Ok(Some(std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn get_pi_config_dir() -> PathBuf {
+    get_pi_dir()
+}
+
+pub fn read_pi_config_source() -> Result<Option<String>, AppError> {
+    let path = get_models_path();
+    if path.exists() {
+        Ok(Some(std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?))
+    } else {
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

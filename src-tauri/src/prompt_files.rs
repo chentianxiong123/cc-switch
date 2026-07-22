@@ -6,6 +6,7 @@ use crate::config::get_claude_settings_path;
 use crate::error::AppError;
 use crate::gemini_config::get_gemini_dir;
 use crate::opencode_config::get_opencode_dir;
+use crate::pi_config::get_pi_dir;
 use crate::settings::{get_hermes_override_dir, get_openclaw_override_dir};
 
 /// 返回指定应用所使用的提示词文件路径。
@@ -17,6 +18,7 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::OpenCode => get_opencode_dir(),
         AppType::Hermes => get_hermes_override_dir().unwrap_or_else(default_hermes_dir),
         AppType::OpenClaw => get_openclaw_override_dir().unwrap_or_else(default_openclaw_dir),
+        AppType::Pi => get_pi_dir(),
     };
 
     let filename = match app {
@@ -26,6 +28,7 @@ pub fn prompt_file_path(app: &AppType) -> Result<PathBuf, AppError> {
         AppType::OpenCode => "AGENTS.md",
         AppType::Hermes => "AGENTS.md",
         AppType::OpenClaw => "AGENTS.md",
+        AppType::Pi => "AGENTS.md",
     };
 
     Ok(base_dir.join(filename))

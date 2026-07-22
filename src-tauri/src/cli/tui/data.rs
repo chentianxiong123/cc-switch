@@ -330,6 +330,7 @@ impl ProxySnapshot {
             AppType::OpenCode => None,
             AppType::Hermes => None,
             AppType::OpenClaw => None,
+            AppType::Pi => None,
         }
     }
 
@@ -1511,6 +1512,11 @@ fn extract_api_url(settings_config: &Value, app_type: &AppType) -> Option<String
         AppType::OpenClaw => settings_config
             .get("baseUrl")
             .or_else(|| settings_config.get("base_url"))?
+            .as_str()
+            .map(|s| s.to_string()),
+        AppType::Pi => settings_config
+            .get("baseUrl")
+            .or_else(|| settings_config.get("baseURL"))?
             .as_str()
             .map(|s| s.to_string()),
     }

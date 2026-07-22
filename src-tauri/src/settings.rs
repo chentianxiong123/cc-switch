@@ -122,6 +122,7 @@ impl VisibleApps {
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
             AppType::OpenClaw => self.openclaw,
+            AppType::Pi => true,
         }
     }
 
@@ -133,6 +134,7 @@ impl VisibleApps {
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
             AppType::OpenClaw => self.openclaw = enabled,
+            AppType::Pi => {}
         }
     }
 
@@ -153,7 +155,7 @@ impl VisibleApps {
     }
 }
 
-fn app_order() -> [AppType; 6] {
+fn app_order() -> [AppType; 7] {
     [
         AppType::Claude,
         AppType::Codex,
@@ -161,6 +163,7 @@ fn app_order() -> [AppType; 6] {
         AppType::OpenCode,
         AppType::Hermes,
         AppType::OpenClaw,
+        AppType::Pi,
     ]
 }
 
@@ -531,6 +534,8 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openclaw_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_config_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_claude: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_provider_codex: Option<String>,
@@ -620,6 +625,7 @@ impl Default for AppSettings {
             opencode_config_dir: None,
             hermes_config_dir: None,
             openclaw_config_dir: None,
+            pi_config_dir: None,
             current_provider_claude: None,
             current_provider_codex: None,
             current_provider_gemini: None,
@@ -1084,6 +1090,14 @@ pub fn get_openclaw_override_dir() -> Option<PathBuf> {
         .map(|p| resolve_override_path(p))
 }
 
+pub fn get_pi_override_dir() -> Option<PathBuf> {
+    let settings = settings_store().read().ok()?;
+    settings
+        .pi_config_dir
+        .as_ref()
+        .map(|p| resolve_override_path(p))
+}
+
 pub fn get_current_provider(app_type: &AppType) -> Option<String> {
     let settings = settings_store().read().ok()?;
     match app_type {
@@ -1093,6 +1107,7 @@ pub fn get_current_provider(app_type: &AppType) -> Option<String> {
         AppType::OpenCode => settings.current_provider_opencode.clone(),
         AppType::Hermes => settings.current_provider_hermes.clone(),
         AppType::OpenClaw => settings.current_provider_openclaw.clone(),
+        AppType::Pi => settings.current_provider_opencode.clone(),
     }
 }
 
@@ -1106,6 +1121,7 @@ pub fn set_current_provider(app_type: &AppType, id: Option<&str>) -> Result<(), 
         AppType::OpenCode => settings.current_provider_opencode = id.map(|value| value.to_string()),
         AppType::Hermes => settings.current_provider_hermes = id.map(|value| value.to_string()),
         AppType::OpenClaw => settings.current_provider_openclaw = id.map(|value| value.to_string()),
+        AppType::Pi => settings.current_provider_opencode = id.map(|value| value.to_string()),
     }
 
     update_settings(settings)

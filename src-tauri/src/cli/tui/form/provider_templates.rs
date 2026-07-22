@@ -424,6 +424,7 @@ pub(super) fn provider_builtin_template_defs(app_type: &AppType) -> &'static [Pr
         AppType::OpenCode => &PROVIDER_TEMPLATE_DEFS_OPENCODE,
         AppType::Hermes => &PROVIDER_TEMPLATE_DEFS_HERMES,
         AppType::OpenClaw => &PROVIDER_TEMPLATE_DEFS_OPENCLAW,
+        AppType::Pi => &[],
     }
 }
 
@@ -435,6 +436,7 @@ pub(super) fn provider_sponsor_presets(app_type: &AppType) -> &'static [SponsorP
         AppType::OpenCode => &SPONSOR_PROVIDER_PRESETS_OPENCODE,
         AppType::Hermes => &SPONSOR_PROVIDER_PRESETS_HERMES,
         AppType::OpenClaw => &SPONSOR_PROVIDER_PRESETS_OPENCLAW,
+        AppType::Pi => &[],
     }
 }
 
@@ -447,7 +449,8 @@ pub(super) fn provider_after_sponsor_template_defs(
         | AppType::Gemini
         | AppType::OpenCode
         | AppType::Hermes
-        | AppType::OpenClaw => &[],
+        | AppType::OpenClaw
+        | AppType::Pi => &[],
     }
 }
 
@@ -991,6 +994,10 @@ impl ProviderAddFormState {
                     self.opencode_model_output_limit.set("");
                     self.opencode_model_original_id = None;
                 }
+            }
+            AppType::Pi => {
+                self.opencode_api_key.set("");
+                self.opencode_base_url.set(preset.opencode_base_url);
             }
         }
 

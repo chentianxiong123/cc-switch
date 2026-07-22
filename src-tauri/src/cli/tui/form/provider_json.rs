@@ -531,6 +531,10 @@ impl ProviderAddFormState {
                     settings_obj.insert("models".to_string(), Value::Array(models));
                 }
             }
+            AppType::Pi => {
+                set_or_remove_trimmed(settings_obj, "apiKey", &self.opencode_api_key.value);
+                set_or_remove_trimmed(settings_obj, "baseUrl", &self.opencode_base_url.value);
+            }
         }
 
         Value::Object(provider_obj)
@@ -1032,7 +1036,7 @@ pub(crate) fn strip_common_config_from_settings(
             )
             .map_err(|e| e.to_string())?;
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => {}
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {}
         AppType::Codex => {
             *settings_value = ProviderService::remove_common_config_from_settings_for_preview(
                 app_type,

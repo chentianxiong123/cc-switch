@@ -21,6 +21,7 @@ impl StreamCheckService {
             }
             AppType::Hermes => Self::extract_hermes_base_url(provider),
             AppType::OpenClaw => Self::extract_openclaw_base_url(provider),
+            AppType::Pi => Self::extract_pi_base_url(provider),
             AppType::Claude | AppType::Codex | AppType::Gemini => get_adapter(app_type)
                 .extract_base_url(provider)
                 .map(|url| url.trim().trim_end_matches('/').to_string())
@@ -109,6 +110,23 @@ impl StreamCheckService {
                     "openclaw_base_url_missing",
                     "OpenClaw 供应商缺少 baseUrl",
                     "OpenClaw provider is missing `baseUrl`",
+                )
+            })
+    }
+
+    fn extract_pi_base_url(provider: &Provider) -> Result<String, AppError> {
+        provider
+            .settings_config
+            .get("baseUrl")
+            .or_else(|| provider.settings_config.get("baseURL"))
+            .and_then(|value| value.as_str())
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::localized(
+                    "pi_base_url_missing",
+                    "Pi Agent 供应商缺少 baseUrl",
+                    "Pi Agent provider is missing `baseUrl`",
                 )
             })
     }

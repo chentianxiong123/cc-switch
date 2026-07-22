@@ -668,6 +668,13 @@ fn provider_comment_credentials<'a>(
                 .map(str::to_string),
             settings.get("apiKey").and_then(|value| value.as_str()),
         ),
+        AppType::Pi => (
+            settings
+                .get("baseUrl")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            settings.get("apiKey").and_then(|value| value.as_str()),
+        ),
     }
 }
 

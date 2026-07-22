@@ -2393,7 +2393,7 @@ impl ProxyService {
                     (None, _) => Ok(incoming_snapshot),
                 }
             }
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(backup_snapshot),
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(backup_snapshot),
         }
     }
 

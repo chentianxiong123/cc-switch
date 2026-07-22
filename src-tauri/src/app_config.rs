@@ -28,7 +28,7 @@ impl McpApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw => false,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -40,7 +40,7 @@ impl McpApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw => {}
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
@@ -94,7 +94,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini,
             AppType::OpenCode => self.opencode,
             AppType::Hermes => self.hermes,
-            AppType::OpenClaw => false,
+            AppType::OpenClaw | AppType::Pi => false,
         }
     }
 
@@ -105,7 +105,7 @@ impl SkillApps {
             AppType::Gemini => self.gemini = enabled,
             AppType::OpenCode => self.opencode = enabled,
             AppType::Hermes => self.hermes = enabled,
-            AppType::OpenClaw => {}
+            AppType::OpenClaw | AppType::Pi => {}
         }
     }
 
@@ -279,6 +279,8 @@ pub struct PromptRoot {
     pub hermes: PromptConfig,
     #[serde(default)]
     pub openclaw: PromptConfig,
+    #[serde(default)]
+    pub pi: PromptConfig,
 }
 
 use crate::config::{copy_file, get_app_config_dir, get_app_config_path, write_json_file};
@@ -388,6 +390,9 @@ pub struct CommonConfigSnippets {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openclaw: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi: Option<String>,
 }
 
 impl CommonConfigSnippets {
@@ -400,6 +405,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode.as_ref(),
             AppType::Hermes => self.hermes.as_ref(),
             AppType::OpenClaw => self.openclaw.as_ref(),
+            AppType::Pi => self.pi.as_ref(),
         }
     }
 
@@ -412,6 +418,7 @@ impl CommonConfigSnippets {
             AppType::OpenCode => self.opencode = snippet,
             AppType::Hermes => self.hermes = snippet,
             AppType::OpenClaw => self.openclaw = snippet,
+            AppType::Pi => self.pi = snippet,
         }
     }
 }
@@ -454,6 +461,7 @@ impl Default for MultiAppConfig {
         apps.insert("opencode".to_string(), ProviderManager::default());
         apps.insert("hermes".to_string(), ProviderManager::default());
         apps.insert("openclaw".to_string(), ProviderManager::default());
+        apps.insert("pi-agent".to_string(), ProviderManager::default());
 
         Self {
             version: 2,
@@ -627,6 +635,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &self.mcp.opencode,
             AppType::Hermes => &self.mcp.hermes,
             AppType::OpenClaw => &self.mcp.openclaw,
+            AppType::Pi => &self.mcp.opencode,
         }
     }
 
@@ -639,6 +648,7 @@ impl MultiAppConfig {
             AppType::OpenCode => &mut self.mcp.opencode,
             AppType::Hermes => &mut self.mcp.hermes,
             AppType::OpenClaw => &mut self.mcp.openclaw,
+            AppType::Pi => &mut self.mcp.opencode,
         }
     }
 
@@ -675,7 +685,7 @@ impl MultiAppConfig {
                 AppType::Gemini => &self.mcp.gemini.servers,
                 AppType::OpenCode => &self.mcp.opencode.servers,
                 AppType::Hermes => &self.mcp.hermes.servers,
-                AppType::OpenClaw => continue,
+                AppType::OpenClaw | AppType::Pi => continue,
             };
 
             for (id, entry) in old_servers {

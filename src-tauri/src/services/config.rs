@@ -291,7 +291,7 @@ impl ConfigService {
             AppType::Gemini => Self::sync_gemini_live(config, &current_id, &provider)?,
             AppType::OpenCode => {}
             AppType::Hermes => {}
-            AppType::OpenClaw => {}
+            AppType::OpenClaw | AppType::Pi => {}
         }
 
         Ok(())

@@ -290,6 +290,7 @@ fn parse_json_object_snippet(
             format!("OpenCode common config snippet is not valid JSON: {e}"),
         ),
         AppType::Codex => AppError::Config(format!("Unexpected JSON common config parse: {e}")),
+        AppType::Pi => AppError::Config("Pi does not support JSON common config".into()),
     })?;
 
     if !value.is_object() {
@@ -310,6 +311,7 @@ fn parse_json_object_snippet(
                 "OpenCode common config snippet must be a JSON object",
             ),
             AppType::Codex => AppError::Config("Unexpected JSON common config type".into()),
+            AppType::Pi => AppError::Config("Pi does not support JSON common config".into()),
         });
     }
 
@@ -349,6 +351,7 @@ pub(super) fn validate_common_config_snippet(
         AppType::Codex => {
             parse_codex_snippet(snippet)?;
         }
+        AppType::Pi => {}
     }
 
     Ok(())
@@ -399,7 +402,7 @@ pub(super) fn settings_contain_common_config(
             }
             _ => false,
         },
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
     }
 }
 
@@ -464,7 +467,7 @@ pub(super) fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(settings.clone()),
     }
 }
 
@@ -513,7 +516,7 @@ pub(super) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(settings.clone()),
     }
 }
 
