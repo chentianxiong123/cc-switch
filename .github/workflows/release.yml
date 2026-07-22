@@ -84,48 +84,54 @@ jobs:
       matrix:
         include:
           # macOS ARM64
-          - os: macos-14
-            platform: darwin-arm64
-            target: aarch64-apple-darwin
-            binary: cc-switch
+          # - os: macos-14
+          #   platform: darwin-arm64
+          #   target: aarch64-apple-darwin
+          #   binary: cc-switch
           # macOS x86_64
-          - os: macos-14
-            platform: darwin-x64
-            target: x86_64-apple-darwin
-            binary: cc-switch
+          # - os: macos-14
+          #   platform: darwin-x64
+          #   target: x86_64-apple-darwin
+          #   binary: cc-switch
           # Windows x86_64
-          - os: windows-2022
-            platform: windows-x64
-            target: x86_64-pc-windows-msvc
-            binary: cc-switch.exe
+          # - os: windows-2022
+          #   platform: windows-x64
+          #   target: x86_64-pc-windows-msvc
+          #   binary: cc-switch.exe
           # Linux x86_64 - MUSL (recommended)
-          - os: ubuntu-22.04
-            platform: linux-x64-musl
-            target: x86_64-unknown-linux-musl
-            binary: cc-switch
-            use_cross: true
+          # - os: ubuntu-22.04
+          #   platform: linux-x64-musl
+          #   target: x86_64-unknown-linux-musl
+          #   binary: cc-switch
+          #   use_cross: true
           # Linux x86_64 - GLIBC (fallback)
-          - os: ubuntu-22.04
-            platform: linux-x64
-            target: x86_64-unknown-linux-gnu
-            binary: cc-switch
-            use_cross: false
+          # - os: ubuntu-22.04
+          #   platform: linux-x64
+          #   target: x86_64-unknown-linux-gnu
+          #   binary: cc-switch
+          #   use_cross: false
           # Linux x86 32 - GLIBC
-          - os: ubuntu-22.04
-            platform: linux-x86
-            target: i686-unknown-linux-gnu
-            binary: cc-switch
-            use_cross: false
+          # - os: ubuntu-22.04
+          #   platform: linux-x86
+          #   target: i686-unknown-linux-gnu
+          #   binary: cc-switch
+          #   use_cross: false
           # Linux ARM64 - MUSL (recommended)
-          - os: ubuntu-22.04
-            platform: linux-arm64-musl
-            target: aarch64-unknown-linux-musl
-            binary: cc-switch
-            use_cross: true
+          # - os: ubuntu-22.04
+          #   platform: linux-arm64-musl
+          #   target: aarch64-unknown-linux-musl
+          #   binary: cc-switch
+          #   use_cross: true
           # Linux ARM64 - GLIBC (fallback)
+          # - os: ubuntu-22.04
+          #   platform: linux-arm64
+          #   target: aarch64-unknown-linux-gnu
+          #   binary: cc-switch
+          #   use_cross: true
+          # Linux ARM32 - GLIBC (hi3798mv100 盒子)
           - os: ubuntu-22.04
-            platform: linux-arm64
-            target: aarch64-unknown-linux-gnu
+            platform: linux-arm32
+            target: armv7-unknown-linux-gnueabihf
             binary: cc-switch
             use_cross: true
 
