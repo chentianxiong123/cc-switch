@@ -2,12 +2,6 @@ name: Rust CI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - "src-tauri/**"
-      - ".github/workflows/rust-ci.yml"
       - ".github/workflows/release.yml"
   pull_request:
     paths:

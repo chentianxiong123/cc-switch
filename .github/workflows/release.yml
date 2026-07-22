@@ -176,6 +176,15 @@ jobs:
             pkg-config \
             libssl-dev
 
+      - name: Install Linux dependencies (ARM32 bindgen)
+        if: runner.os == 'Linux' && matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            libclang-dev \
+            pkg-config
+
       - name: Build with cross
         if: matrix.use_cross == true
         working-directory: src-tauri

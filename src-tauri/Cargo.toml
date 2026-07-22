@@ -83,7 +83,7 @@ semver = "1.0"
 flate2 = "1.0"
 brotli = "7"
 tar = "0.4"
-rquickjs = { version = "0.8", features = ["array-buffer", "classes"] }
+rquickjs = { version = "0.8", features = ["array-buffer", "classes", "bindgen"] }
 zip = "2.2"
 url = "2.5"
 unicode-width = "0.1"
