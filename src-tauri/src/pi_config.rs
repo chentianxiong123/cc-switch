@@ -120,10 +120,7 @@ pub fn set_provider(id: &str, provider_config: Value) -> Result<(), AppError> {
     if config.get("providers").is_none() {
         config["providers"] = json!({});
     }
-    if let Some(providers) = config
-        .get_mut("providers")
-        .and_then(|v| v.as_object_mut())
-    {
+    if let Some(providers) = config.get_mut("providers").and_then(|v| v.as_object_mut()) {
         providers.insert(id.to_string(), provider_config);
     }
     write_config(&config)
@@ -131,10 +128,7 @@ pub fn set_provider(id: &str, provider_config: Value) -> Result<(), AppError> {
 
 pub fn remove_provider(id: &str) -> Result<(), AppError> {
     let mut config = read_config()?;
-    if let Some(providers) = config
-        .get_mut("providers")
-        .and_then(|v| v.as_object_mut())
-    {
+    if let Some(providers) = config.get_mut("providers").and_then(|v| v.as_object_mut()) {
         providers.remove(id);
     }
     write_config(&config)
@@ -164,7 +158,9 @@ pub fn set_typed_provider(id: &str, config: &PiProviderConfig) -> Result<(), App
 pub fn capture_pi_live_snapshot() -> Result<Option<String>, AppError> {
     let path = get_models_path();
     if path.exists() {
-        Ok(Some(std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?))
+        Ok(Some(
+            std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?,
+        ))
     } else {
         Ok(None)
     }
@@ -177,7 +173,9 @@ pub fn get_pi_config_dir() -> PathBuf {
 pub fn read_pi_config_source() -> Result<Option<String>, AppError> {
     let path = get_models_path();
     if path.exists() {
-        Ok(Some(std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?))
+        Ok(Some(
+            std::fs::read_to_string(&path).map_err(|e| AppError::io(&path, e))?,
+        ))
     } else {
         Ok(None)
     }

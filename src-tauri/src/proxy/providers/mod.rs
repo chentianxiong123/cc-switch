@@ -142,7 +142,9 @@ impl ProviderType {
                 }
                 ProviderType::Gemini
             }
-            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => ProviderType::Codex,
+            AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+                ProviderType::Codex
+            }
         }
     }
 

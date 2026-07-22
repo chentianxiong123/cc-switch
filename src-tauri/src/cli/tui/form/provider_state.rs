@@ -1022,7 +1022,11 @@ impl ProviderAddFormState {
                 !self.is_claude_official_provider() && !self.is_claude_github_copilot_provider()
             }
             AppType::Codex => !self.is_codex_official_provider(),
-            AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
+            AppType::Gemini
+            | AppType::OpenCode
+            | AppType::Hermes
+            | AppType::OpenClaw
+            | AppType::Pi => false,
         }
     }
 
@@ -1975,7 +1979,11 @@ impl ProviderAddFormState {
                 !self.is_claude_official_provider() && !self.is_claude_codex_oauth_provider()
             }
             AppType::Codex => !self.is_codex_official_provider(),
-            AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => false,
+            AppType::Gemini
+            | AppType::OpenCode
+            | AppType::Hermes
+            | AppType::OpenClaw
+            | AppType::Pi => false,
         }
     }
 

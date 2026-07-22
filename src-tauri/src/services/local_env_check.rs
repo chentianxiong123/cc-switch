@@ -859,10 +859,11 @@ mod tests {
 
         assert_eq!(
             display_names,
-            vec!["Claude", "Codex", "Gemini", "OpenCode", "Hermes", "OpenClaw"]
+            vec!["Claude", "Codex", "Gemini", "OpenCode", "Hermes", "OpenClaw", "Pi Agent"]
         );
         assert_eq!(LocalTool::Hermes.binary_name(), "hermes");
         assert_eq!(LocalTool::OpenClaw.binary_name(), "openclaw");
+        assert_eq!(LocalTool::Pi.binary_name(), "pi");
         assert_eq!(LocalTool::Hermes.version_timeout(), Duration::from_secs(10));
         assert_eq!(LocalTool::Claude.version_timeout(), Duration::from_secs(5));
     }

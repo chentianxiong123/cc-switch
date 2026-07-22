@@ -3038,7 +3038,10 @@ impl ProviderService {
             }
             AppType::Pi => {
                 let config = provider.settings_config.clone();
-                Ok(PreparedLiveWrite::Pi { provider_id: provider.id.clone(), config })
+                Ok(PreparedLiveWrite::Pi {
+                    provider_id: provider.id.clone(),
+                    config,
+                })
             }
         }
     }
@@ -3062,7 +3065,10 @@ impl ProviderService {
                     .map(|_| ())
                     .map_err(Self::normalize_openclaw_live_write_error)
             }
-            PreparedLiveWrite::Pi { provider_id, config } => {
+            PreparedLiveWrite::Pi {
+                provider_id,
+                config,
+            } => {
                 crate::pi_config::set_provider(provider_id, config.clone())?;
                 Ok(())
             }

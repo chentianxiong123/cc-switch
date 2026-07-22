@@ -155,7 +155,7 @@ impl VisibleApps {
     }
 }
 
-fn app_order() -> [AppType; 7] {
+fn app_order() -> [AppType; 6] {
     [
         AppType::Claude,
         AppType::Codex,
@@ -163,7 +163,6 @@ fn app_order() -> [AppType; 7] {
         AppType::OpenCode,
         AppType::Hermes,
         AppType::OpenClaw,
-        AppType::Pi,
     ]
 }
 

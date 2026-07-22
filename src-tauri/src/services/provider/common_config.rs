@@ -467,7 +467,9 @@ pub(super) fn apply_common_config_to_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            Ok(settings.clone())
+        }
     }
 }
 
@@ -516,7 +518,9 @@ pub(super) fn remove_common_config_from_settings(
             }
             Ok(result)
         }
-        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => Ok(settings.clone()),
+        AppType::OpenCode | AppType::Hermes | AppType::OpenClaw | AppType::Pi => {
+            Ok(settings.clone())
+        }
     }
 }
 
