@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/api/adapter";
+import { isWeb } from "@/lib/api/capabilities";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Plus,
@@ -26,7 +27,7 @@ import {
   Cpu,
   LayoutDashboard,
 } from "lucide-react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getWindow } from "@/lib/api/adapter";
 import type { Provider, VisibleApps } from "@/types";
 import { useProvidersQuery, useSettingsQuery } from "@/lib/query";
 import {
@@ -439,7 +440,8 @@ function App() {
 
     const setupWindowStateSync = async () => {
       try {
-        const currentWindow = getCurrentWindow();
+        const currentWindow = await getWindow();
+        if (!currentWindow) return;
         const syncWindowMaximizedState = async () => {
           const maximized = await currentWindow.isMaximized();
           if (active) {
@@ -469,7 +471,8 @@ function App() {
 
     const syncWindowDecorations = async () => {
       try {
-        await getCurrentWindow().setDecorations(!useAppWindowControls);
+        const win = await getWindow();
+        if (win) await win.setDecorations(!useAppWindowControls);
       } catch (error) {
         console.error("[App] Failed to update window decorations", error);
       }
@@ -791,7 +794,8 @@ function App() {
 
   const handleWindowMinimize = async () => {
     try {
-      await getCurrentWindow().minimize();
+      const win = await getWindow();
+      if (win) await win.minimize();
     } catch (error) {
       console.error("[App] Failed to minimize window", error);
       notifyWindowControlError(error);
@@ -800,7 +804,8 @@ function App() {
 
   const handleWindowToggleMaximize = async () => {
     try {
-      const currentWindow = getCurrentWindow();
+      const currentWindow = await getWindow();
+      if (!currentWindow) return;
       await currentWindow.toggleMaximize();
       setIsWindowMaximized(await currentWindow.isMaximized());
     } catch (error) {
@@ -811,7 +816,8 @@ function App() {
 
   const handleWindowClose = async () => {
     try {
-      await getCurrentWindow().close();
+      const win = await getWindow();
+      if (win) await win.close();
     } catch (error) {
       console.error("[App] Failed to close window", error);
       notifyWindowControlError(error);

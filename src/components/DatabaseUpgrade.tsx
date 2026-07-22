@@ -1,6 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
-import { exit } from "@tauri-apps/plugin-process";
+import { invoke, isWeb } from "@/lib/api/adapter";
 import {
   Database,
   ExternalLink,
@@ -110,7 +109,12 @@ export function DatabaseUpgrade({ payload }: DatabaseUpgradeProps) {
           <Button
             variant="ghost"
             className="ml-auto text-muted-foreground"
-            onClick={() => void exit(0)}
+            onClick={async () => {
+              if (!isWeb()) {
+                const { exit } = await import("@tauri-apps/plugin-process");
+                exit(0);
+              }
+            }}
           >
             {t("dbUpgrade.quit", "退出")}
           </Button>

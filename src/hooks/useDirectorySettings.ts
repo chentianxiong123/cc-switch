@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { isWeb } from "@/lib/api/adapter";
 import { settingsApi, type AppId } from "@/lib/api";
 import type { SettingsFormState } from "./useSettingsForm";
 
@@ -62,6 +62,10 @@ const sanitizeDir = (value?: string | null): string | undefined => {
 
 const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
   try {
+    if (isWeb()) {
+      return undefined;
+    }
+    const { homeDir, join } = await import("@tauri-apps/api/path");
     const home = await homeDir();
     return await join(home, ".cc-switch");
   } catch (error) {
@@ -77,6 +81,10 @@ const computeDefaultConfigDir = async (
   app: DirectoryAppId,
 ): Promise<string | undefined> => {
   try {
+    if (isWeb()) {
+      return undefined;
+    }
+    const { homeDir, join } = await import("@tauri-apps/api/path");
     const home = await homeDir();
     return await join(home, APP_DIRECTORY_META[app].defaultFolder);
   } catch (error) {

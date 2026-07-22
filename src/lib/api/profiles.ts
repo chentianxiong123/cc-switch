@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./adapter";
 
 /**
  * Profile 操作的应用分组（与后端 services/profile.rs 的 ProfileScope 严格对应）

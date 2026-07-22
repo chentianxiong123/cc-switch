@@ -1,0 +1,2161 @@
+let tauriInvoke: (<T>(cmd: string, args?: Record<string, unknown>) => Promise<T>) | undefined;
+
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "HEAD";
+type CommandArgs = Record<string, unknown>;
+
+interface Endpoint {
+  url: string;
+  method: HttpMethod;
+  body?: unknown;
+}
+
+const DEFAULT_WEB_API_BASE = "/api";
+
+// Storage keys - exported for use across modules
+export const WEB_AUTH_STORAGE_KEY = "cc-switch-web-auth";
+export const WEB_CSRF_STORAGE_KEY = "cc-switch-csrf-token";
+export const WEB_API_BASE_STORAGE_KEY = "cc-switch-web-api-base";
+
+const getEnvNumber = (value: unknown, fallback: number) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const WEB_FETCH_TIMEOUT_MS = Math.max(
+  0,
+  getEnvNumber(import.meta.env?.VITE_WEB_FETCH_TIMEOUT_MS, 180_000),
+);
+const WEB_FETCH_MAX_RETRIES = Math.max(
+  0,
+  Math.floor(getEnvNumber(import.meta.env?.VITE_WEB_FETCH_RETRIES, 1)),
+);
+const WEB_FETCH_RETRY_DELAY_MS = Math.max(
+  0,
+  getEnvNumber(import.meta.env?.VITE_WEB_FETCH_RETRY_DELAY_MS, 500),
+);
+
+export function normalizeWebApiBase(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === "/") return "/";
+  const normalized = trimmed.replace(/\/+$/, "");
+  if (!normalized) return null;
+  return normalized;
+}
+
+const isRelativeWebApiBase = (value: string): boolean =>
+  value.startsWith("/") && !value.startsWith("//");
+
+const parseHttpUrl = (value: string): URL | null => {
+  try {
+    const parsed = new URL(value);
+    if (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      !parsed.username &&
+      !parsed.password
+    ) {
+      return parsed;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+};
+
+const parseIpv4Address = (value: string): number[] | null => {
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) return null;
+  const parts = value.split(".").map((part) => Number(part));
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return null;
+  }
+  return parts;
+};
+
+const isPrivateIpv4Address = (hostname: string): boolean => {
+  const parts = parseIpv4Address(hostname);
+  if (!parts) return false;
+  const [first, second] = parts;
+  if (first === 10) return true;
+  if (first === 127) return true;
+  if (first === 169 && second === 254) return true;
+  if (first === 172 && second >= 16 && second <= 31) return true;
+  if (first === 192 && second === 168) return true;
+  return false;
+};
+
+const getIpv6FirstHextet = (hostname: string): number | null => {
+  if (!hostname.includes(":")) return null;
+  const [first] = hostname.split(":");
+  if (first === "") return 0;
+  if (!/^[0-9a-f]{1,4}$/.test(first)) return null;
+  return parseInt(first, 16);
+};
+
+const isPrivateIpv6Address = (hostname: string): boolean => {
+  if (!hostname.includes(":")) return false;
+  if (hostname === "::1" || hostname === "0:0:0:0:0:0:0:1") return true;
+  const firstHextet = getIpv6FirstHextet(hostname);
+  if (firstHextet === null) return false;
+  if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return true;
+  if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return true;
+  return false;
+};
+
+const isPrivateHostname = (hostname: string): boolean => {
+  const normalized = hostname.toLowerCase();
+  if (normalized === "localhost") return true;
+  if (isPrivateIpv4Address(normalized)) return true;
+  if (isPrivateIpv6Address(normalized)) return true;
+  return false;
+};
+
+const isPrivateWebApiOrigin = (origin: string): boolean => {
+  const parsed = parseHttpUrl(origin);
+  if (!parsed) return false;
+  return isPrivateHostname(parsed.hostname);
+};
+
+const WEB_API_ORIGIN_BLOCKED_MESSAGE =
+  "API 地址不在允许列表，请设置 CORS_ALLOW_ORIGINS 或启用 ALLOW_LAN_CORS（局域网自动放行）";
+
+export function resolveWebOrigin(url: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (parsed.username || parsed.password) return null;
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+const getAllowedWebApiOrigins = (): Set<string> => {
+  const origins = new Set<string>();
+  if (typeof window !== "undefined" && window.location?.origin) {
+    origins.add(window.location.origin);
+  }
+  const allowedOrigins = import.meta.env?.VITE_WEB_API_ALLOWED_ORIGINS;
+  if (typeof allowedOrigins === "string" && allowedOrigins.trim()) {
+    for (const entry of allowedOrigins.split(",")) {
+      const trimmed = entry.trim();
+      if (!trimmed) continue;
+      const origin = resolveWebOrigin(trimmed);
+      if (origin) origins.add(origin);
+    }
+  }
+  return origins;
+};
+
+const isAllowedWebApiOrigin = (origin: string): boolean => {
+  if (typeof window === "undefined") return true;
+  if (getAllowedWebApiOrigins().has(origin)) return true;
+  const currentOrigin = window.location?.origin;
+  if (!currentOrigin) return false;
+  return isPrivateWebApiOrigin(currentOrigin) && isPrivateWebApiOrigin(origin);
+};
+
+const getWebApiBaseProtocolError = (value: string): string | null => {
+  if (typeof window === "undefined") return null;
+  if (window.location?.protocol !== "https:") return null;
+  const parsed = parseHttpUrl(value);
+  if (parsed?.protocol === "http:") {
+    return "当前页面为 HTTPS，API 地址必须使用 https 或相对路径";
+  }
+  return null;
+};
+
+export function getWebApiBaseValidationError(value: string): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = normalizeWebApiBase(trimmed);
+  if (!normalized) return "API 地址无效";
+  if (isRelativeWebApiBase(normalized)) return null;
+  const parsed = parseHttpUrl(normalized);
+  if (!parsed) return "API 地址无效";
+  const protocolError = getWebApiBaseProtocolError(normalized);
+  if (protocolError) return protocolError;
+  if (!isAllowedWebApiOrigin(parsed.origin)) {
+    return WEB_API_ORIGIN_BLOCKED_MESSAGE;
+  }
+  return null;
+}
+
+export function isValidWebApiBase(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (isRelativeWebApiBase(trimmed)) return true;
+  const parsed = parseHttpUrl(trimmed);
+  if (!parsed) return false;
+  if (getWebApiBaseProtocolError(trimmed) !== null) return false;
+  return isAllowedWebApiOrigin(parsed.origin);
+}
+
+const resolveWebApiBase = (value: unknown): string | null => {
+  const normalized = normalizeWebApiBase(value);
+  if (!normalized) return null;
+  if (!isValidWebApiBase(normalized)) return null;
+  return normalized;
+};
+
+export function getWebApiBase(): string {
+  const stored = getStoredWebApiBase();
+  if (stored) return stored;
+  if (typeof window !== "undefined") {
+    const fromWindow = resolveWebApiBase(window.__CC_SWITCH_API_BASE__);
+    if (fromWindow) return fromWindow;
+  }
+  const fromEnv = resolveWebApiBase(import.meta.env?.VITE_WEB_API_BASE);
+  if (fromEnv) return fromEnv;
+  return DEFAULT_WEB_API_BASE;
+}
+
+export function buildWebApiUrlWithBase(base: string, path: string): string {
+  const trimmedPath = path.trim();
+  if (!trimmedPath) return base;
+  const normalizedBase = base.replace(/\/+$/, "");
+  const normalizedPath = trimmedPath.startsWith("/")
+    ? trimmedPath
+    : `/${trimmedPath}`;
+  if (!normalizedBase) return normalizedPath;
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+export function buildWebApiUrl(path: string): string {
+  return buildWebApiUrlWithBase(getWebApiBase(), path);
+}
+
+const encode = (value: unknown) => encodeURIComponent(String(value));
+
+const queryString = (entries: Record<string, unknown>): string => {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(entries)) {
+    if (value !== undefined && value !== null && value !== "") {
+      params.set(key, String(value));
+    }
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isAllowedExternalUrl = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  try {
+    const base =
+      typeof window !== "undefined" ? window.location.origin : undefined;
+    const parsed = new URL(trimmed, base);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+};
+
+const requireArg = <T = unknown>(
+  args: unknown,
+  key: string,
+  cmd: string,
+): T => {
+  if (!isRecord(args)) {
+    throw new Error(
+      `Missing argument "${key}" for command "${cmd}" in web mode`,
+    );
+  }
+  const value = args[key];
+  if (value === undefined || value === null) {
+    throw new Error(
+      `Missing argument "${key}" for command "${cmd}" in web mode`,
+    );
+  }
+  return value as T;
+};
+
+export function isWeb(): boolean {
+  if (import.meta.env?.VITE_MODE === "web") {
+    return true;
+  }
+  if (typeof window === "undefined") {
+    return true;
+  }
+
+  const tauriGlobal =
+    (window as any).__TAURI__ || (window as any).__TAURI_INTERNALS__;
+  return !tauriGlobal;
+}
+
+declare global {
+  interface Window {
+    __CC_SWITCH_TOKENS__?: {
+      csrfToken: string;
+      __noticeShown?: boolean;
+    };
+    __CC_SWITCH_API_BASE__?: string;
+  }
+}
+
+function getAutoTokens() {
+  if (typeof window === "undefined") return undefined;
+  const tokens = window.__CC_SWITCH_TOKENS__;
+  if (tokens?.csrfToken) {
+    if (!tokens.__noticeShown) {
+      console.info("cc-switch: 已自动应用内置 CSRF Token");
+      tokens.__noticeShown = true;
+    }
+    return { csrfToken: tokens.csrfToken };
+  }
+  return undefined;
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  if (timeoutMs <= 0) {
+    return fetch(url, init);
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getErrorMessage = (payload: unknown): string => {
+  if (!payload) return "";
+  if (typeof payload === "string") {
+    return payload;
+  }
+  if (typeof payload === "object") {
+    const obj = payload as Record<string, unknown>;
+    const candidate = obj.message ?? obj.error ?? obj.detail;
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate;
+    }
+    const nested = obj.payload;
+    if (typeof nested === "string" && nested.trim()) {
+      return nested;
+    }
+    if (nested && typeof nested === "object") {
+      const nestedObj = nested as Record<string, unknown>;
+      const nestedCandidate =
+        nestedObj.message ?? nestedObj.error ?? nestedObj.detail;
+      if (typeof nestedCandidate === "string" && nestedCandidate.trim()) {
+        return nestedCandidate;
+      }
+    }
+  }
+  return "";
+};
+
+const htmlSnippet = (value: string): string => {
+  const text = value.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  const withoutTags = text
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return withoutTags.slice(0, 180);
+};
+
+const webApiError = (
+  message: string,
+  status?: number,
+  payload?: unknown,
+): Error => {
+  const error = new Error(message);
+  if (status !== undefined) {
+    (error as any).status = status;
+  }
+  if (payload !== undefined) {
+    (error as any).payload = payload;
+  }
+  return error;
+};
+
+const responseErrorMessage = (
+  response: Response,
+  contentType: string,
+  rawText: string,
+  errorPayload?: unknown,
+): string => {
+  if (errorPayload !== undefined) {
+    return (
+      getErrorMessage(errorPayload) ||
+      `API request failed with status ${response.status}`
+    );
+  }
+  if (contentType.includes("text/html")) {
+    const snippet = htmlSnippet(rawText);
+    return snippet
+      ? `API returned HTML ${response.status}: ${snippet}`
+      : `API returned HTML ${response.status}`;
+  }
+  return rawText.trim()
+    ? rawText.trim()
+    : `API request failed with status ${response.status}`;
+};
+
+const normalizeFetchError = (error: unknown): Error => {
+  if ((error as any)?.name === "AbortError") {
+    return webApiError("API request timed out");
+  }
+  if (error instanceof TypeError) {
+    return webApiError(
+      "API connection failed. Check whether the cc-switch web server is running.",
+    );
+  }
+  return error instanceof Error ? error : webApiError(String(error));
+};
+
+/**
+ * Base64 encode a UTF-8 string, with fallbacks for different environments.
+ * Exported for reuse across modules.
+ */
+export function base64EncodeUtf8(value: string): string {
+  if (typeof window !== "undefined" && typeof window.btoa === "function") {
+    const bytes = new TextEncoder().encode(value);
+    let binary = "";
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    return window.btoa(binary);
+  }
+
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(value, "utf8").toString("base64");
+  }
+
+  throw new Error("Base64 encoder is not available");
+}
+
+interface StoredWebCredentialsPayload {
+  token: string;
+  apiBase: string | null;
+  username: string | null;
+  legacy: boolean;
+}
+
+const parseStoredWebCredentialsValue = (
+  value: string,
+): StoredWebCredentialsPayload | null => {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (isRecord(parsed) && typeof parsed.token === "string") {
+        const token = parsed.token.trim();
+        if (!token) return null;
+        const apiBase =
+          typeof parsed.apiBase === "string" ? parsed.apiBase : null;
+        const username =
+          typeof parsed.username === "string" ? parsed.username.trim() : "";
+        return {
+          token,
+          apiBase,
+          username: username ? username : null,
+          legacy: false,
+        };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+  return { token: trimmed, apiBase: null, username: null, legacy: true };
+};
+
+const isSameWebOrigin = (origin: string): boolean =>
+  typeof window !== "undefined" && window.location?.origin === origin;
+
+const resolveStoredWebCredentialsPayload = (
+  targetUrl?: string,
+): StoredWebCredentialsPayload | undefined => {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = window.sessionStorage?.getItem(WEB_AUTH_STORAGE_KEY);
+    if (!value) return undefined;
+    const parsed = parseStoredWebCredentialsValue(value);
+    if (!parsed) return undefined;
+    const normalizedApiBase = normalizeWebApiBase(parsed.apiBase);
+    const inferredTargetOrigin =
+      typeof targetUrl === "string" && targetUrl.trim()
+        ? resolveWebOrigin(targetUrl)
+        : normalizedApiBase
+          ? isRelativeWebApiBase(normalizedApiBase)
+            ? window.location?.origin
+            : resolveWebOrigin(normalizedApiBase)
+          : window.location?.origin;
+    if (!inferredTargetOrigin) return undefined;
+    if (!isAllowedWebApiOrigin(inferredTargetOrigin)) return undefined;
+    const sameOrigin = isSameWebOrigin(inferredTargetOrigin);
+    if (parsed.legacy) {
+      return sameOrigin ? parsed : undefined;
+    }
+    if (normalizedApiBase && !isValidWebApiBase(normalizedApiBase)) {
+      return undefined;
+    }
+    if (!normalizedApiBase || isRelativeWebApiBase(normalizedApiBase)) {
+      return sameOrigin ? parsed : undefined;
+    }
+    const storedOrigin = resolveWebOrigin(normalizedApiBase);
+    if (!storedOrigin) return undefined;
+    return storedOrigin === inferredTargetOrigin ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+function getStoredWebCredentials(targetUrl?: string): string | undefined {
+  const payload = resolveStoredWebCredentialsPayload(targetUrl);
+  return payload?.token;
+}
+
+export function getStoredWebUsername(targetUrl?: string): string {
+  const payload = resolveStoredWebCredentialsPayload(targetUrl);
+  if (!payload || payload.legacy) return "admin";
+  if (payload.username && payload.username.trim()) {
+    return payload.username;
+  }
+  return "admin";
+}
+
+export function getStoredWebApiBase(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = window.localStorage?.getItem(WEB_API_BASE_STORAGE_KEY);
+    if (!value) return undefined;
+    const resolved = resolveWebApiBase(value);
+    if (!resolved) {
+      window.localStorage?.removeItem(WEB_API_BASE_STORAGE_KEY);
+      return undefined;
+    }
+    return resolved;
+  } catch {
+    return undefined;
+  }
+}
+
+function getStoredWebCsrfToken(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  try {
+    const value = window.sessionStorage?.getItem(WEB_CSRF_STORAGE_KEY);
+    if (!value) return undefined;
+    return value;
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildWebAuthHeadersForUrl(url: string): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const origin = resolveWebOrigin(url);
+  if (!origin) {
+    throw new Error("API 地址无效");
+  }
+  if (!isAllowedWebApiOrigin(origin)) {
+    throw new Error(WEB_API_ORIGIN_BLOCKED_MESSAGE);
+  }
+  const headers: Record<string, string> = {};
+  const tokens = getAutoTokens();
+  const csrfToken = tokens?.csrfToken ?? getStoredWebCsrfToken();
+  if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+  const storedAuth = getStoredWebCredentials(url);
+  if (storedAuth) {
+    headers.Authorization = `Basic ${storedAuth}`;
+  }
+  return headers;
+}
+
+export function setWebCredentials(
+  username: string,
+  password: string,
+  apiBase?: string | null,
+) {
+  if (typeof window === "undefined") return;
+  const trimmedUsername = username.trim();
+  const trimmedPassword = password.trim();
+  if (!trimmedUsername || !trimmedPassword) return;
+  const encoded = base64EncodeUtf8(`${trimmedUsername}:${trimmedPassword}`);
+  const normalizedApiBase = normalizeWebApiBase(apiBase);
+  const resolvedApiBase =
+    normalizedApiBase && isValidWebApiBase(normalizedApiBase)
+      ? normalizedApiBase
+      : null;
+  const payload = JSON.stringify({
+    token: encoded,
+    apiBase: resolvedApiBase,
+    username: trimmedUsername,
+  });
+  try {
+    window.sessionStorage?.setItem(WEB_AUTH_STORAGE_KEY, payload);
+  } catch {
+    // ignore
+  }
+}
+
+export function setWebApiBaseOverride(value: string | null) {
+  if (typeof window === "undefined") return;
+  try {
+    const normalized = normalizeWebApiBase(value);
+    if (!normalized) {
+      clearWebApiBaseOverride();
+      return;
+    }
+    if (!isValidWebApiBase(normalized)) return;
+    window.localStorage?.setItem(WEB_API_BASE_STORAGE_KEY, normalized);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearWebApiBaseOverride() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage?.removeItem(WEB_API_BASE_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function clearWebCredentials() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage?.removeItem(WEB_AUTH_STORAGE_KEY);
+    window.sessionStorage?.removeItem(WEB_CSRF_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function commandToEndpoint(
+  cmd: string,
+  args: CommandArgs = {},
+): Endpoint {
+  const apiBase = getWebApiBase();
+  switch (cmd) {
+    case "get_capabilities":
+      return { method: "GET", url: `${apiBase}/capabilities` };
+    case "get_openclaw_status":
+      return { method: "GET", url: `${apiBase}/openclaw/status` };
+    case "get_openclaw_raw_config":
+      return { method: "GET", url: `${apiBase}/openclaw/raw` };
+    case "set_openclaw_raw_config":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/raw`,
+        body: {
+          value: requireArg(args, "source", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "get_openclaw_live_providers":
+      return { method: "GET", url: `${apiBase}/openclaw/providers` };
+    case "get_openclaw_live_provider":
+      return {
+        method: "GET",
+        url: `${apiBase}/openclaw/providers/${encode(requireArg(args, "providerId", cmd))}`,
+      };
+    case "preview_openclaw_provider_reconciliation":
+      return { method: "GET", url: `${apiBase}/openclaw/reconciliation` };
+    case "apply_openclaw_provider_reconciliation":
+      return {
+        method: "POST",
+        url: `${apiBase}/openclaw/reconciliation`,
+        body: {
+          providerIds: requireArg(args, "providerIds", cmd),
+          updateExisting: Boolean(args.updateExisting),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "import_openclaw_providers_from_live":
+      return {
+        method: "POST",
+        url: `${apiBase}/openclaw/reconciliation/import-new`,
+      };
+    case "get_openclaw_default_model":
+      return { method: "GET", url: `${apiBase}/openclaw/default-model` };
+    case "set_openclaw_default_model":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/default-model`,
+        body: {
+          model: requireArg(args, "model", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "clear_openclaw_default_model": {
+      const params = new URLSearchParams();
+      if (args.expectedEtag) {
+        params.set("expectedEtag", String(args.expectedEtag));
+      }
+      const query = params.toString();
+      return {
+        method: "DELETE",
+        url: `${apiBase}/openclaw/default-model${query ? `?${query}` : ""}`,
+      };
+    }
+    case "get_openclaw_model_catalog":
+      return { method: "GET", url: `${apiBase}/openclaw/model-catalog` };
+    case "set_openclaw_model_catalog":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/model-catalog`,
+        body: {
+          value: requireArg(args, "catalog", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "get_openclaw_agents_defaults":
+      return { method: "GET", url: `${apiBase}/openclaw/agents-defaults` };
+    case "set_openclaw_agents_defaults":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/agents-defaults`,
+        body: {
+          value: requireArg(args, "defaults", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "get_openclaw_env":
+      return { method: "GET", url: `${apiBase}/openclaw/env` };
+    case "set_openclaw_env":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/env`,
+        body: {
+          value: requireArg(args, "env", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "get_openclaw_tools":
+      return { method: "GET", url: `${apiBase}/openclaw/tools` };
+    case "set_openclaw_tools":
+      return {
+        method: "PUT",
+        url: `${apiBase}/openclaw/tools`,
+        body: {
+          value: requireArg(args, "tools", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "scan_openclaw_config_health":
+      return { method: "GET", url: `${apiBase}/openclaw/health` };
+
+    // Pi Agent commands
+    case "get_pi_agent_live_provider_ids":
+      return {
+        method: "GET",
+        url: `${apiBase}/pi-agent/live-provider-ids`,
+      };
+    case "get_pi_agent_live_provider": {
+      const piProviderId = requireArg(args, "providerId", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/pi-agent/providers/${encode(piProviderId)}`,
+      };
+    }
+    case "set_pi_agent_live_provider": {
+      const piSetId = requireArg(args, "providerId", cmd);
+      const piProviderConfig = requireArg(args, "providerConfig", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/pi-agent/providers/${encode(piSetId)}`,
+        body: piProviderConfig,
+      };
+    }
+    case "remove_pi_agent_live_provider": {
+      const piRemoveId = requireArg(args, "providerId", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/pi-agent/providers/${encode(piRemoveId)}`,
+      };
+    }
+
+    case "query_subscription_quota": {
+      const params = new URLSearchParams({
+        provider: String(requireArg(args, "provider", cmd)),
+      });
+      if (args.accountId) params.set("accountId", String(args.accountId));
+      if (args.force) params.set("force", "true");
+      return {
+        method: "GET",
+        url: `${apiBase}/subscriptions/quota?${params.toString()}`,
+      };
+    }
+    case "list_sessions":
+      return {
+        method: "GET",
+        url: `${apiBase}/sessions${args.refresh ? "?refresh=true" : ""}`,
+      };
+    case "list_sessions_page": {
+      const params = new URLSearchParams();
+      if (args.cursor) params.set("cursor", String(args.cursor));
+      if (args.limit) params.set("limit", String(args.limit));
+      if (args.providerId) params.set("providerId", String(args.providerId));
+      if (args.query) params.set("query", String(args.query));
+      if (args.refresh) params.set("refresh", "true");
+      const query = params.toString();
+      return {
+        method: "GET",
+        url: `${apiBase}/sessions/page${query ? `?${query}` : ""}`,
+      };
+    }
+    case "get_session_messages":
+      return {
+        method: "POST",
+        url: `${apiBase}/sessions/messages`,
+        body: {
+          providerId: requireArg(args, "providerId", cmd),
+          sourcePath: requireArg(args, "sourcePath", cmd),
+        },
+      };
+    case "delete_session":
+      return {
+        method: "DELETE",
+        url: `${apiBase}/sessions`,
+        body: {
+          providerId: requireArg(args, "providerId", cmd),
+          sessionId: requireArg(args, "sessionId", cmd),
+          sourcePath: requireArg(args, "sourcePath", cmd),
+        },
+      };
+    case "delete_sessions":
+      return {
+        method: "POST",
+        url: `${apiBase}/sessions/delete-batch`,
+        body: requireArg(args, "items", cmd),
+      };
+    case "list_workspace_files":
+      return { method: "GET", url: `${apiBase}/workspace/files` };
+    case "read_workspace_file":
+      return {
+        method: "GET",
+        url: `${apiBase}/workspace/files/${encode(requireArg(args, "filename", cmd))}`,
+      };
+    case "write_workspace_file":
+      return {
+        method: "PUT",
+        url: `${apiBase}/workspace/files/${encode(requireArg(args, "filename", cmd))}`,
+        body: {
+          content: requireArg(args, "content", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "list_workspace_backups":
+      return {
+        method: "GET",
+        url: `${apiBase}/workspace/files/${encode(requireArg(args, "filename", cmd))}/backups`,
+      };
+    case "restore_workspace_backup":
+      return {
+        method: "POST",
+        url: `${apiBase}/workspace/files/${encode(requireArg(args, "filename", cmd))}/restore`,
+        body: {
+          backupId: requireArg(args, "backupId", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "list_daily_memory_files":
+      return { method: "GET", url: `${apiBase}/workspace/memory` };
+    case "read_daily_memory_file":
+      return {
+        method: "GET",
+        url: `${apiBase}/workspace/memory/${encode(requireArg(args, "date", cmd))}`,
+      };
+    case "write_daily_memory_file":
+      return {
+        method: "PUT",
+        url: `${apiBase}/workspace/memory/${encode(requireArg(args, "date", cmd))}`,
+        body: {
+          content: requireArg(args, "content", cmd),
+          expectedEtag: args.expectedEtag ?? null,
+        },
+      };
+    case "search_daily_memory_files": {
+      const params = new URLSearchParams({
+        query: String(requireArg(args, "query", cmd)),
+      });
+      return {
+        method: "GET",
+        url: `${apiBase}/workspace/memory/search?${params.toString()}`,
+      };
+    }
+    case "delete_daily_memory_file": {
+      const params = new URLSearchParams();
+      if (args.expectedEtag) {
+        params.set("expectedEtag", String(args.expectedEtag));
+      }
+      const query = params.toString();
+      return {
+        method: "DELETE",
+        url: `${apiBase}/workspace/memory/${encode(requireArg(args, "date", cmd))}${query ? `?${query}` : ""}`,
+      };
+    }
+    case "parse_deeplink":
+      return {
+        method: "POST",
+        url: `${apiBase}/deeplink/parse`,
+        body: { url: requireArg(args, "url", cmd) },
+      };
+    case "merge_deeplink_config":
+      return {
+        method: "POST",
+        url: `${apiBase}/deeplink/merge-config`,
+        body: requireArg(args, "request", cmd),
+      };
+    case "import_from_deeplink_unified":
+    case "import_from_deeplink":
+      return {
+        method: "POST",
+        url: `${apiBase}/deeplink/import`,
+        body: requireArg(args, "request", cmd),
+      };
+    // Provider commands
+    case "get_providers": {
+      const app = requireArg(args, "app", cmd);
+      return { method: "GET", url: `${apiBase}/providers/${encode(app)}` };
+    }
+    case "get_current_provider": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/${encode(app)}/current`,
+      };
+    }
+    case "get_backup_provider": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/${encode(app)}/backup`,
+      };
+    }
+    case "set_backup_provider": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/providers/${encode(app)}/backup`,
+        body: { id: args.id ?? null },
+      };
+    }
+    case "add_provider": {
+      const app = requireArg(args, "app", cmd);
+      const provider = requireArg(args, "provider", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/${encode(app)}`,
+        body: provider,
+      };
+    }
+    case "update_provider": {
+      const app = requireArg(args, "app", cmd);
+      const provider = requireArg<Record<string, unknown>>(
+        args,
+        "provider",
+        cmd,
+      );
+      const providerId = (provider.id ?? provider.providerId ?? args.id) as
+        | string
+        | number
+        | null
+        | undefined;
+      if (!providerId) {
+        throw new Error(`Missing provider id for command "${cmd}" in web mode`);
+      }
+      return {
+        method: "PUT",
+        url: `${apiBase}/providers/${encode(app)}/${encode(providerId)}`,
+        body: provider,
+      };
+    }
+    case "delete_provider": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/providers/${encode(app)}/${encode(id)}`,
+      };
+    }
+    case "switch_provider": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/${encode(app)}/${encode(id)}/switch`,
+      };
+    }
+    case "import_default_config": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/${encode(app)}/import-default`,
+      };
+    }
+    case "read_live_provider_settings": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/${encode(app)}/live-settings`,
+      };
+    }
+    case "update_tray_menu": {
+      return { method: "POST", url: `${apiBase}/tray/update` };
+    }
+    case "update_providers_sort_order": {
+      const app = requireArg(args, "app", cmd);
+      const updates = requireArg(args, "updates", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/providers/${encode(app)}/sort-order`,
+        body: { updates },
+      };
+    }
+    case "get_omo_plugin_status":
+      return { method: "GET", url: `${apiBase}/providers/omo/plugin-status` };
+    case "get_omo_slim_plugin_status":
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/omo-slim/plugin-status`,
+      };
+    case "disable_current_omo":
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/omo/disable-current`,
+      };
+    case "disable_current_omo_slim":
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/omo-slim/disable-current`,
+      };
+    case "fetch_models_for_config":
+      return {
+        method: "POST",
+        url: `${apiBase}/model-fetch`,
+        body: args,
+      };
+    case "stream_check_provider": {
+      const appType = requireArg(args, "appType", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/stream-check/providers/${encode(providerId)}`,
+        body: { appType },
+      };
+    }
+    case "stream_check_all_providers":
+      return {
+        method: "POST",
+        url: `${apiBase}/stream-check/all`,
+        body: args,
+      };
+    case "get_stream_check_config":
+      return {
+        method: "GET",
+        url: `${apiBase}/stream-check/config`,
+      };
+    case "save_stream_check_config":
+      return {
+        method: "PUT",
+        url: `${apiBase}/stream-check/config`,
+        body: requireArg(args, "config", cmd),
+      };
+    case "get_stream_check_logs": {
+      const query = (args.query ?? {}) as Record<string, unknown>;
+      return {
+        method: "GET",
+        url: `${apiBase}/stream-check/logs${queryString(query)}`,
+      };
+    }
+    case "get_latest_stream_check_logs":
+      return {
+        method: "GET",
+        url: `${apiBase}/stream-check/logs/latest${queryString({
+          appType: args.appType,
+        })}`,
+      };
+    case "get_opencode_live_provider_ids":
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/opencode/live-provider-ids`,
+      };
+    case "get_universal_providers":
+      return { method: "GET", url: `${apiBase}/providers/universal` };
+    case "get_universal_provider": {
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/universal/${encode(id)}`,
+      };
+    }
+    case "upsert_universal_provider": {
+      const provider = requireArg<Record<string, unknown>>(
+        args,
+        "provider",
+        cmd,
+      );
+      const id = provider.id ?? args.id;
+      if (!id) {
+        throw new Error(
+          `Missing universal provider id for command "${cmd}" in web mode`,
+        );
+      }
+      return {
+        method: "PUT",
+        url: `${apiBase}/providers/universal/${encode(id)}`,
+        body: provider,
+      };
+    }
+    case "delete_universal_provider": {
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/providers/universal/${encode(id)}`,
+      };
+    }
+    case "sync_universal_provider_to_apps": {
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/universal/${encode(id)}/sync`,
+      };
+    }
+    case "preview_universal_provider": {
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/universal/preview`,
+        body: requireArg(args, "provider", cmd),
+      };
+    }
+    case "queryProviderUsage": {
+      const app = requireArg(args, "app", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/${encode(app)}/${encode(providerId)}/usage`,
+      };
+    }
+    case "testUsageScript": {
+      const app = requireArg(args, "app", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/${encode(app)}/${encode(providerId)}/usage/test`,
+        body: {
+          scriptCode: requireArg(args, "scriptCode", cmd),
+          timeout: args.timeout,
+          apiKey: args.apiKey,
+          baseUrl: args.baseUrl,
+          accessToken: args.accessToken,
+          userId: args.userId,
+          templateType: args.templateType,
+        },
+      };
+    }
+    case "get_claude_desktop_default_routes":
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/claude-desktop/default-routes`,
+      };
+    case "get_claude_desktop_status":
+      return {
+        method: "GET",
+        url: `${apiBase}/providers/claude-desktop/status`,
+      };
+    case "import_claude_desktop_providers_from_claude":
+      return {
+        method: "POST",
+        url: `${apiBase}/providers/claude-desktop/import-from-claude`,
+      };
+
+    // MCP commands
+    case "get_claude_mcp_status":
+      return { method: "GET", url: `${apiBase}/mcp/status` };
+    case "read_claude_mcp_config":
+      return { method: "GET", url: `${apiBase}/mcp/config/claude` };
+    case "upsert_claude_mcp_server": {
+      const id = requireArg(args, "id", cmd);
+      const spec = requireArg(args, "spec", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/mcp/config/claude/servers/${encode(id)}`,
+        body: { spec },
+      };
+    }
+    case "delete_claude_mcp_server": {
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/mcp/config/claude/servers/${encode(id)}`,
+      };
+    }
+    case "validate_mcp_command":
+      return {
+        method: "POST",
+        url: `${apiBase}/mcp/validate`,
+        body: { cmd: requireArg(args, "cmd", cmd) },
+      };
+    case "get_mcp_config": {
+      const app = requireArg(args, "app", cmd);
+      return { method: "GET", url: `${apiBase}/mcp/config/${encode(app)}` };
+    }
+    case "upsert_mcp_server_in_config": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      const spec = requireArg(args, "spec", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/mcp/config/${encode(app)}/servers/${encode(id)}`,
+        body: {
+          spec,
+          ...(args.syncOtherSide !== undefined
+            ? { syncOtherSide: args.syncOtherSide }
+            : {}),
+        },
+      };
+    }
+    case "delete_mcp_server_in_config": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/mcp/config/${encode(app)}/servers/${encode(id)}`,
+        body:
+          args.syncOtherSide !== undefined
+            ? { syncOtherSide: args.syncOtherSide }
+            : undefined,
+      };
+    }
+    case "set_mcp_enabled": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      const enabled = requireArg(args, "enabled", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/mcp/config/${encode(app)}/servers/${encode(id)}/enabled`,
+        body: { enabled },
+      };
+    }
+    case "get_mcp_servers":
+      return { method: "GET", url: `${apiBase}/mcp/servers` };
+    case "import_mcp_from_apps":
+      return { method: "POST", url: `${apiBase}/mcp/servers/import-from-apps` };
+    case "upsert_mcp_server": {
+      const server = requireArg(args, "server", cmd);
+      const id = requireArg(server, "id", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/mcp/servers/${encode(id)}`,
+        body: server,
+      };
+    }
+    case "delete_mcp_server": {
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/mcp/servers/${encode(id)}`,
+      };
+    }
+    case "toggle_mcp_app": {
+      const serverId = requireArg(args, "serverId", cmd);
+      const app = requireArg(args, "app", cmd);
+      const enabled = requireArg(args, "enabled", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/mcp/servers/${encode(serverId)}/apps/${encode(app)}`,
+        body: { enabled },
+      };
+    }
+
+    // Prompt commands
+    case "get_prompts": {
+      const app = requireArg(args, "app", cmd);
+      return { method: "GET", url: `${apiBase}/prompts/${encode(app)}` };
+    }
+    case "upsert_prompt": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      const prompt = requireArg(args, "prompt", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/prompts/${encode(app)}/${encode(id)}`,
+        body: prompt,
+      };
+    }
+    case "delete_prompt": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/prompts/${encode(app)}/${encode(id)}`,
+      };
+    }
+    case "enable_prompt": {
+      const app = requireArg(args, "app", cmd);
+      const id = requireArg(args, "id", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/prompts/${encode(app)}/${encode(id)}/enable`,
+      };
+    }
+    case "import_prompt_from_file": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/prompts/${encode(app)}/import-from-file`,
+      };
+    }
+    case "get_current_prompt_file_content": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/prompts/${encode(app)}/current-file`,
+      };
+    }
+
+    // Skill commands
+    case "get_skills": {
+      const app = typeof args.app === "string" ? args.app : undefined;
+      return {
+        method: "GET",
+        url: app ? `${apiBase}/skills?app=${encode(app)}` : `${apiBase}/skills`,
+      };
+    }
+    case "install_skill":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/install`,
+        body: (() => {
+          const directory = requireArg<string>(args, "directory", cmd);
+          const payload: { directory: string; force?: boolean; app?: string } =
+            { directory };
+          if (typeof args.force === "boolean") {
+            payload.force = args.force;
+          }
+          if (typeof args.app === "string") {
+            payload.app = args.app;
+          }
+          return payload;
+        })(),
+      };
+    case "uninstall_skill":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/uninstall`,
+        body: (() => {
+          const payload: { directory: string; app?: string } = {
+            directory: requireArg(args, "directory", cmd),
+          };
+          if (typeof args.app === "string") {
+            payload.app = args.app;
+          }
+          return payload;
+        })(),
+      };
+    case "scan_unmanaged_skills":
+      return { method: "GET", url: `${apiBase}/skills/discovery` };
+    case "import_skills_from_apps":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/discovery/import`,
+        body: { imports: requireArg(args, "imports", cmd) },
+      };
+    case "get_skill_backups":
+      return { method: "GET", url: `${apiBase}/skills/backups` };
+    case "delete_skill_backup": {
+      const backupId = requireArg(args, "backupId", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/skills/backups/${encode(backupId)}`,
+      };
+    }
+    case "restore_skill_backup":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/backups/restore`,
+        body: (() => {
+          const payload: { backupId: string; force?: boolean; app?: string } = {
+            backupId: requireArg(args, "backupId", cmd),
+          };
+          if (typeof args.force === "boolean") {
+            payload.force = args.force;
+          }
+          if (typeof args.app === "string") {
+            payload.app = args.app;
+          }
+          return payload;
+        })(),
+      };
+    case "install_skills_from_zip":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/import-zip`,
+        body: (() => {
+          const payload: {
+            filePath?: string;
+            contentBase64?: string;
+            fileName?: string;
+            force?: boolean;
+            app?: string;
+          } = {};
+          if (typeof args.filePath === "string") {
+            payload.filePath = args.filePath;
+          }
+          if (typeof args.contentBase64 === "string") {
+            payload.contentBase64 = args.contentBase64;
+          }
+          if (typeof args.fileName === "string") {
+            payload.fileName = args.fileName;
+          }
+          if (typeof args.force === "boolean") {
+            payload.force = args.force;
+          }
+          if (typeof args.app === "string") {
+            payload.app = args.app;
+          }
+          return payload;
+        })(),
+      };
+    case "migrate_skill_storage":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/storage/migrate`,
+        body: { target: requireArg(args, "target", cmd) },
+      };
+    case "check_skill_updates":
+      return { method: "GET", url: `${apiBase}/skills/updates` };
+    case "update_skill":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/updates/apply`,
+        body: { id: requireArg(args, "id", cmd) },
+      };
+    case "search_skills_sh": {
+      const query = requireArg(args, "query", cmd);
+      const limit = requireArg(args, "limit", cmd);
+      const offset = requireArg(args, "offset", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/skills/catalog/search?query=${encode(query)}&limit=${encode(limit)}&offset=${encode(offset)}`,
+      };
+    }
+    case "install_catalog_skill":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/catalog/install`,
+        body: {
+          directory: requireArg(args, "directory", cmd),
+          repoOwner: requireArg(args, "repoOwner", cmd),
+          repoName: requireArg(args, "repoName", cmd),
+          repoBranch:
+            typeof args.repoBranch === "string" ? args.repoBranch : undefined,
+          app: typeof args.app === "string" ? args.app : undefined,
+          force: typeof args.force === "boolean" ? args.force : undefined,
+        },
+      };
+    case "get_skill_repos":
+      return { method: "GET", url: `${apiBase}/skills/repos` };
+    case "add_skill_repo":
+      return {
+        method: "POST",
+        url: `${apiBase}/skills/repos`,
+        body: requireArg(args, "repo", cmd),
+      };
+    case "remove_skill_repo": {
+      const owner = requireArg(args, "owner", cmd);
+      const name = requireArg(args, "name", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/skills/repos/${encode(owner)}/${encode(name)}`,
+      };
+    }
+
+    // Settings / system commands
+    case "get_settings":
+      return { method: "GET", url: `${apiBase}/settings` };
+    case "save_settings":
+      return {
+        method: "PUT",
+        url: `${apiBase}/settings`,
+        body: requireArg(args, "settings", cmd),
+      };
+    case "proxy_status":
+      return { method: "GET", url: `${apiBase}/proxy/status` };
+    case "proxy_config":
+      return { method: "GET", url: `${apiBase}/proxy/config` };
+    case "save_proxy_config":
+      return {
+        method: "PUT",
+        url: `${apiBase}/proxy/config`,
+        body: { settings: requireArg(args, "settings", cmd) },
+      };
+    case "save_proxy_settings":
+      return {
+        method: "PUT",
+        url: `${apiBase}/proxy/settings`,
+        body: { settings: requireArg(args, "settings", cmd) },
+      };
+    case "start_proxy":
+      return {
+        method: "POST",
+        url: `${apiBase}/proxy/start`,
+        body: { settings: requireArg(args, "settings", cmd) },
+      };
+    case "stop_proxy":
+      return { method: "POST", url: `${apiBase}/proxy/stop` };
+    case "test_proxy":
+      return {
+        method: "POST",
+        url: `${apiBase}/proxy/test`,
+        body: { settings: requireArg(args, "settings", cmd) },
+      };
+    case "set_proxy_takeover":
+      return {
+        method: "PUT",
+        url: `${apiBase}/proxy/takeover/${encodeURIComponent(
+          String(requireArg(args, "app", cmd)),
+        )}`,
+        body: { enabled: requireArg(args, "enabled", cmd) },
+      };
+    case "restore_proxy":
+      return { method: "POST", url: `${apiBase}/proxy/restore` };
+    case "recover_stale_proxy_takeover":
+      return {
+        method: "POST",
+        url: `${apiBase}/proxy/recover-stale-takeover`,
+      };
+    case "proxy_recent_logs":
+      return { method: "GET", url: `${apiBase}/proxy/logs/recent` };
+    case "get_failover_queue": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/proxy/failover/${encode(app)}`,
+      };
+    }
+    case "replace_failover_queue": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/proxy/failover/${encode(app)}`,
+        body: { providerIds: requireArg(args, "providerIds", cmd) },
+      };
+    }
+    case "add_failover_provider": {
+      const app = requireArg(args, "app", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/proxy/failover/${encode(app)}/${encode(providerId)}`,
+      };
+    }
+    case "remove_failover_provider": {
+      const app = requireArg(args, "app", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/proxy/failover/${encode(app)}/${encode(providerId)}`,
+      };
+    }
+    case "clear_failover_queue": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/proxy/failover/${encode(app)}`,
+      };
+    }
+    case "reset_provider_circuit": {
+      const app = requireArg(args, "app", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/proxy/health/${encode(app)}/${encode(providerId)}/reset`,
+      };
+    }
+    case "list_model_pricing":
+      return { method: "GET", url: `${apiBase}/proxy/pricing/models` };
+    case "upsert_model_pricing": {
+      const record = requireArg<Record<string, unknown>>(args, "record", cmd);
+      const modelId = record.modelId ?? args.modelId;
+      if (!modelId) {
+        throw new Error(
+          `Missing model pricing id for command "${cmd}" in web mode`,
+        );
+      }
+      return {
+        method: "PUT",
+        url: `${apiBase}/proxy/pricing/models/${encode(modelId)}`,
+        body: record,
+      };
+    }
+    case "delete_model_pricing": {
+      const modelId = requireArg(args, "modelId", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/proxy/pricing/models/${encode(modelId)}`,
+      };
+    }
+    case "get_usage_summary":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/summary${queryString({
+          startDate: args.startDate,
+          endDate: args.endDate,
+          appType: args.appType,
+          providerId: args.providerId,
+          model: args.model,
+        })}`,
+      };
+    case "get_usage_summary_by_app":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/summary-by-app${queryString({
+          startDate: args.startDate,
+          endDate: args.endDate,
+        })}`,
+      };
+    case "get_usage_trends":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/trends${queryString({
+          startDate: args.startDate,
+          endDate: args.endDate,
+          appType: args.appType,
+          providerId: args.providerId,
+          model: args.model,
+        })}`,
+      };
+    case "get_provider_stats":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/providers${queryString({
+          startDate: args.startDate,
+          endDate: args.endDate,
+          appType: args.appType,
+          providerId: args.providerId,
+          model: args.model,
+        })}`,
+      };
+    case "get_model_stats":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/models${queryString({
+          startDate: args.startDate,
+          endDate: args.endDate,
+          appType: args.appType,
+          providerId: args.providerId,
+          model: args.model,
+        })}`,
+      };
+    case "get_request_logs":
+      return {
+        method: "POST",
+        url: `${apiBase}/usage/logs`,
+        body: {
+          filters: requireArg(args, "filters", cmd),
+          page: args.page,
+          pageSize: args.pageSize,
+        },
+      };
+    case "get_request_detail": {
+      const requestId = requireArg(args, "requestId", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/logs/${encode(requestId)}`,
+      };
+    }
+    case "get_model_pricing":
+      return { method: "GET", url: `${apiBase}/usage/pricing/models` };
+    case "update_model_pricing": {
+      const modelId = requireArg(args, "modelId", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/usage/pricing/models/${encode(modelId)}`,
+        body: {
+          modelId,
+          displayName: requireArg(args, "displayName", cmd),
+          inputCostPerMillion: requireArg(args, "inputCost", cmd),
+          outputCostPerMillion: requireArg(args, "outputCost", cmd),
+          cacheReadCostPerMillion: requireArg(args, "cacheReadCost", cmd),
+          cacheCreationCostPerMillion: requireArg(
+            args,
+            "cacheCreationCost",
+            cmd,
+          ),
+        },
+      };
+    }
+    case "check_provider_limits": {
+      const appType = requireArg(args, "appType", cmd);
+      const providerId = requireArg(args, "providerId", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/limits/${encode(appType)}/${encode(providerId)}`,
+      };
+    }
+    case "sync_session_usage":
+      return { method: "POST", url: `${apiBase}/usage/sessions/sync` };
+    case "get_usage_data_sources":
+      return { method: "GET", url: `${apiBase}/usage/data-sources` };
+    case "get_usage_data_extent":
+      return {
+        method: "GET",
+        url: `${apiBase}/usage/data-extent${queryString({
+          appType: args.appType,
+        })}`,
+      };
+    case "upload_webdav_snapshot":
+      return {
+        method: "POST",
+        url: `${apiBase}/webdav/snapshot/upload`,
+        body:
+          args.settings !== undefined ? { settings: args.settings } : undefined,
+      };
+    case "preview_webdav_snapshot":
+      return args.settings !== undefined
+        ? {
+            method: "POST",
+            url: `${apiBase}/webdav/snapshot/preview`,
+            body: { settings: args.settings },
+          }
+        : { method: "GET", url: `${apiBase}/webdav/snapshot/preview` };
+    case "download_webdav_snapshot":
+      return {
+        method: "POST",
+        url: `${apiBase}/webdav/snapshot/download`,
+        body:
+          args.settings !== undefined ? { settings: args.settings } : undefined,
+      };
+    case "sync_webdav_snapshot":
+      return {
+        method: "POST",
+        url: `${apiBase}/webdav/snapshot/sync`,
+        body:
+          args.settings !== undefined ? { settings: args.settings } : undefined,
+      };
+    case "list_webdav_backups":
+      return args.settings !== undefined
+        ? {
+            method: "POST",
+            url: `${apiBase}/webdav/backups`,
+            body: { settings: args.settings },
+          }
+        : { method: "GET", url: `${apiBase}/webdav/backups` };
+    case "restore_webdav_backup":
+      return {
+        method: "POST",
+        url: `${apiBase}/webdav/backups/restore`,
+        body: {
+          backupId: requireArg(args, "backupId", cmd),
+          ...(args.settings !== undefined ? { settings: args.settings } : {}),
+        },
+      };
+    case "update_web_credentials":
+      return {
+        method: "PUT",
+        url: `${apiBase}/system/credentials`,
+        body: {
+          username: requireArg(args, "username", cmd),
+          password: requireArg(args, "password", cmd),
+        },
+      };
+    case "restart_app":
+      return { method: "POST", url: `${apiBase}/unsupported/restart_app` };
+    case "check_for_updates":
+      return {
+        method: "POST",
+        url: `${apiBase}/unsupported/check_for_updates`,
+      };
+    case "is_portable_mode":
+      return { method: "GET", url: `${apiBase}/unsupported/is_portable_mode` };
+    case "check_env_conflicts":
+    case "delete_env_vars":
+    case "restore_env_backup":
+    case "get_env_var":
+    case "set_env_var":
+    case "test_api_endpoints":
+    case "get_custom_endpoints":
+    case "add_custom_endpoint":
+    case "remove_custom_endpoint":
+    case "update_endpoint_last_used":
+      return {
+        method:
+          cmd === "get_custom_endpoints" || cmd === "get_env_var"
+            ? "GET"
+            : "POST",
+        url: `${apiBase}/unsupported/${encode(cmd)}`,
+        body: args,
+      };
+    case "get_config_dir": {
+      const app = requireArg(args, "app", cmd);
+      return { method: "GET", url: `${apiBase}/config/${encode(app)}/dir` };
+    }
+    case "get_config_dir_info": {
+      const app = requireArg(args, "app", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/config/${encode(app)}/dir-info`,
+      };
+    }
+    case "open_config_folder": {
+      const app = requireArg(args, "app", cmd);
+      return { method: "POST", url: `${apiBase}/config/${encode(app)}/open` };
+    }
+    case "pick_directory":
+      return {
+        method: "POST",
+        url: `${apiBase}/fs/pick-directory`,
+        body:
+          args.defaultPath !== undefined
+            ? { defaultPath: args.defaultPath }
+            : undefined,
+      };
+    case "get_claude_code_config_path":
+      return { method: "GET", url: `${apiBase}/config/claude-code/path` };
+    case "get_app_config_path":
+      return { method: "GET", url: `${apiBase}/config/app/path` };
+    case "open_app_config_folder":
+      return { method: "POST", url: `${apiBase}/config/app/open` };
+    case "get_app_config_dir_override":
+      return { method: "GET", url: `${apiBase}/config/app/override` };
+    case "set_app_config_dir_override":
+      return {
+        method: "PUT",
+        url: `${apiBase}/config/app/override`,
+        body: { path: args.path },
+      };
+    case "apply_claude_plugin_config":
+      return {
+        method: "POST",
+        url: `${apiBase}/config/claude/plugin`,
+        body: { official: requireArg(args, "official", cmd) },
+      };
+    case "save_file_dialog":
+      return {
+        method: "POST",
+        url: `${apiBase}/fs/save-file`,
+        body: { defaultName: requireArg(args, "defaultName", cmd) },
+      };
+    case "open_file_dialog":
+      return { method: "POST", url: `${apiBase}/fs/open-file` };
+    case "export_config_to_file":
+      return {
+        method: "POST",
+        url: `${apiBase}/config/export`,
+        body: { filePath: requireArg(args, "filePath", cmd) },
+      };
+    case "import_config_from_file": {
+      const body: Record<string, string> = {
+        filePath: requireArg(args, "filePath", cmd),
+      };
+      // Web 模式下需要传递文件内容，因为浏览器无法访问服务器文件系统
+      if (typeof args.content === "string") {
+        body.content = args.content;
+      }
+      return {
+        method: "POST",
+        url: `${apiBase}/config/import`,
+        body,
+      };
+    }
+    case "create_db_backup":
+      return { method: "POST", url: `${apiBase}/config/backups` };
+    case "list_db_backups":
+      return { method: "GET", url: `${apiBase}/config/backups` };
+    case "restore_db_backup":
+      return {
+        method: "POST",
+        url: `${apiBase}/config/backups/restore`,
+        body: { filename: requireArg(args, "filename", cmd) },
+      };
+    case "rename_db_backup":
+      return {
+        method: "POST",
+        url: `${apiBase}/config/backups/rename`,
+        body: {
+          oldFilename: requireArg(args, "oldFilename", cmd),
+          newName: requireArg(args, "newName", cmd),
+        },
+      };
+    case "delete_db_backup":
+      return {
+        method: "DELETE",
+        url: `${apiBase}/config/backups/${encode(requireArg(args, "filename", cmd))}`,
+      };
+    case "sync_current_providers_live":
+      return { method: "POST", url: `${apiBase}/providers/sync-current` };
+    case "get_codex_oauth_models":
+      return {
+        method: "GET",
+        url: `${apiBase}/model-fetch/codex-oauth${queryString({
+          accountId: args.accountId,
+        })}`,
+      };
+    case "get_github_copilot_models":
+      return {
+        method: "GET",
+        url: `${apiBase}/model-fetch/github-copilot${queryString({
+          accountId: args.accountId,
+        })}`,
+      };
+    case "list_managed_auth_accounts":
+      return {
+        method: "GET",
+        url: `${apiBase}/auth/accounts${queryString({
+          provider: args.provider,
+        })}`,
+      };
+    case "import_managed_auth_account":
+      return {
+        method: "POST",
+        url: `${apiBase}/auth/accounts`,
+        body: requireArg(args, "input", cmd),
+      };
+    case "set_default_managed_auth_account": {
+      const provider = requireArg(args, "provider", cmd);
+      const accountId = requireArg(args, "accountId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/auth/accounts/default${queryString({
+          provider,
+          accountId,
+        })}`,
+      };
+    }
+    case "delete_managed_auth_account": {
+      const provider = requireArg(args, "provider", cmd);
+      const accountId = requireArg(args, "accountId", cmd);
+      return {
+        method: "DELETE",
+        url: `${apiBase}/auth/accounts${queryString({
+          provider,
+          accountId,
+        })}`,
+      };
+    }
+    case "logout_managed_auth_account": {
+      const provider = requireArg(args, "provider", cmd);
+      const accountId = requireArg(args, "accountId", cmd);
+      return {
+        method: "POST",
+        url: `${apiBase}/auth/accounts/logout${queryString({
+          provider,
+          accountId,
+        })}`,
+      };
+    }
+    case "start_managed_auth_device_login":
+      return {
+        method: "POST",
+        url: `${apiBase}/auth/device/start`,
+        body: requireArg(args, "request", cmd),
+      };
+    case "poll_managed_auth_device_login":
+      return {
+        method: "POST",
+        url: `${apiBase}/auth/device/poll`,
+        body: requireArg(args, "request", cmd),
+      };
+    case "query_managed_auth_usage":
+      return {
+        method: "GET",
+        url: `${apiBase}/auth/usage${queryString({
+          provider: args.provider,
+          accountId: args.accountId,
+        })}`,
+      };
+    case "open_external":
+      return {
+        method: "POST",
+        url: `${apiBase}/system/open-external`,
+        body: { url: requireArg(args, "url", cmd) },
+      };
+
+    // Config snippet commands
+    case "get_claude_common_config_snippet":
+      return {
+        method: "GET",
+        url: `${apiBase}/config/claude/common-snippet`,
+      };
+    case "set_claude_common_config_snippet":
+      return {
+        method: "PUT",
+        url: `${apiBase}/config/claude/common-snippet`,
+        body: { snippet: requireArg(args, "snippet", cmd) },
+      };
+    case "get_common_config_snippet": {
+      const appType = requireArg(args, "appType", cmd);
+      return {
+        method: "GET",
+        url: `${apiBase}/config/${encode(appType)}/common-snippet`,
+      };
+    }
+    case "set_common_config_snippet": {
+      const appType = requireArg(args, "appType", cmd);
+      return {
+        method: "PUT",
+        url: `${apiBase}/config/${encode(appType)}/common-snippet`,
+        body: { snippet: requireArg(args, "snippet", cmd) },
+      };
+    }
+
+    default:
+      throw new Error(`Command ${cmd} is not supported in web mode`);
+  }
+}
+
+export async function invoke(
+  cmd: "check_for_updates",
+  args?: CommandArgs,
+): Promise<null>;
+export async function invoke(
+  cmd: "get_env_var",
+  args?: CommandArgs,
+): Promise<null>;
+export async function invoke(
+  cmd: "set_env_var",
+  args?: CommandArgs,
+): Promise<null>;
+export async function invoke<T>(cmd: string, args?: CommandArgs): Promise<T>;
+export async function invoke<T>(
+  cmd: string,
+  args: CommandArgs = {},
+): Promise<T | null> {
+  if (!isWeb()) {
+    if (!tauriInvoke) {
+      tauriInvoke = (await import("@tauri-apps/api/core")).invoke;
+    }
+    return tauriInvoke<T>(cmd, args);
+  }
+
+  switch (cmd) {
+    case "open_external": {
+      const url = args.url as string | undefined;
+      if (typeof window !== "undefined" && typeof url === "string") {
+        const trimmed = url.trim();
+        if (isAllowedExternalUrl(trimmed)) {
+          window.open(trimmed, "_blank", "noopener,noreferrer");
+        } else {
+          console.warn("cc-switch: blocked unsafe open_external url");
+        }
+      }
+      return true as T;
+    }
+    default:
+      break;
+  }
+
+  const endpoint = commandToEndpoint(cmd, args);
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+    ...buildWebAuthHeadersForUrl(endpoint.url),
+  };
+  const init: RequestInit = {
+    method: endpoint.method,
+    credentials: "include",
+    headers,
+  };
+
+  if (endpoint.method !== "GET" && endpoint.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(endpoint.body);
+  }
+
+  const canRetry = endpoint.method === "GET" || endpoint.method === "HEAD";
+  const maxRetries = canRetry ? WEB_FETCH_MAX_RETRIES : 0;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const response = await fetchWithTimeout(
+        endpoint.url,
+        init,
+        WEB_FETCH_TIMEOUT_MS,
+      );
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const rawText = await response.text();
+        let errorPayload: unknown;
+        if (contentType.includes("application/json") && rawText.trim()) {
+          try {
+            errorPayload = JSON.parse(rawText);
+          } catch {
+            errorPayload = undefined;
+          }
+        }
+        throw webApiError(
+          responseErrorMessage(response, contentType, rawText, errorPayload),
+          response.status,
+          errorPayload,
+        );
+      }
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        return (await response.json()) as T;
+      }
+
+      const text = await response.text();
+      if (
+        contentType.includes("text/html") ||
+        /^\s*<!doctype html/i.test(text)
+      ) {
+        throw webApiError("API returned HTML instead of JSON", response.status);
+      }
+      return text as unknown as T;
+    } catch (error) {
+      const errorName = (error as any)?.name;
+      const isAbortError = errorName === "AbortError";
+      const isNetworkError = error instanceof TypeError;
+      const shouldRetry =
+        canRetry && attempt < maxRetries && (isAbortError || isNetworkError);
+
+      if (!shouldRetry) {
+        throw normalizeFetchError(error);
+      }
+
+      if (WEB_FETCH_RETRY_DELAY_MS > 0) {
+        await delay(WEB_FETCH_RETRY_DELAY_MS);
+      }
+    }
+  }
+
+  throw new Error("Request failed after retries");
+}
+
+export type UnlistenFn = () => void;
+
+export async function listen<T>(
+  event: string,
+  handler: (event: { payload: T }) => void,
+): Promise<UnlistenFn> {
+  if (!isWeb()) {
+    const { listen: tauriListen } = await import("@tauri-apps/api/event");
+    return tauriListen<T>(event, handler);
+  }
+  return () => {};
+}
+
+export async function getWindow() {
+  if (!isWeb()) {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    return getCurrentWindow();
+  }
+  return null;
+}
