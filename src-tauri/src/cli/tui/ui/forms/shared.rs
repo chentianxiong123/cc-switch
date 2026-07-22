@@ -72,6 +72,13 @@ pub(crate) fn add_form_key_items(
                 keys.extend([("↑↓", texts::tui_key_select()), ("Enter", enter_action)]);
                 if matches!(
                     selected_field,
+                    Some(ProviderAddField::ClaudeBaseUrl | ProviderAddField::CodexBaseUrl)
+                ) {
+                    // The field-specific action must survive narrow key-bar clipping.
+                    keys.insert(0, ("f", texts::tui_full_url_label()));
+                }
+                if matches!(
+                    selected_field,
                     Some(
                         ProviderAddField::CodexModel
                             | ProviderAddField::GeminiModel

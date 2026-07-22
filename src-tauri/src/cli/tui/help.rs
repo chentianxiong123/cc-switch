@@ -510,10 +510,15 @@ fn provider_field_help(app_type: AppType, field: ProviderAddField) -> HelpConten
         | ProviderAddField::GeminiBaseUrl
         | ProviderAddField::OpenCodeBaseUrl
         | ProviderAddField::HermesBaseUrl => {
-            let body = if matches!(app_type, AppType::Codex) {
+            let body = if matches!(field, ProviderAddField::CodexBaseUrl) {
                 help_lines(
-                    "Codex 原生只支持 OpenAI Responses API 与 GPT 系列模型。\n如果供应商使用 Chat Completions 协议，或模型不是 GPT 系列（如 DeepSeek、Kimi），需要保持本地路由开启，让 cc-switch 做协议和模型路由转换。",
-                    "Codex natively supports OpenAI Responses API and GPT-series models.\nIf this provider uses Chat Completions, or the model is not GPT-series, such as DeepSeek or Kimi, keep local routing enabled so cc-switch can translate protocol and model routing.",
+                    "Codex 原生只支持 OpenAI Responses API 与 GPT 系列模型。\n如果供应商使用 Chat Completions 协议，或模型不是 GPT 系列（如 DeepSeek、Kimi），需要保持本地路由开启，让 cc-switch 做协议和模型路由转换。\n\n聚焦此项时按 f 可切换完整 URL 模式。开启后，本地代理会直接使用这里填写的请求地址，不再拼接请求路径；该模式必须通过本地代理使用。",
+                    "Codex natively supports OpenAI Responses API and GPT-series models.\nIf this provider uses Chat Completions, or the model is not GPT-series, such as DeepSeek or Kimi, keep local routing enabled so cc-switch can translate protocol and model routing.\n\nPress f while this field is focused to toggle Full URL mode. When enabled, the local proxy uses this exact request URL without appending a request path; this mode requires the local proxy.",
+                )
+            } else if matches!(field, ProviderAddField::ClaudeBaseUrl) {
+                help_lines(
+                    "供应商 API 的基础地址。通常不需要在末尾重复补全具体接口路径，除非供应商文档明确要求。\n\n聚焦此项时按 f 可切换完整 URL 模式。开启后，本地代理会直接使用这里填写的请求地址，不再拼接请求路径；该模式必须通过本地代理使用。",
+                    "Base URL for the provider API. Usually you do not need to append the final endpoint path unless the provider docs require it.\n\nPress f while this field is focused to toggle Full URL mode. When enabled, the local proxy uses this exact request URL without appending a request path; this mode requires the local proxy.",
                 )
             } else {
                 help_lines(

@@ -317,6 +317,35 @@ impl App {
             {
                 Some(self.handle_provider_model_fetch(selected))
             }
+            KeyCode::Char('f')
+                if matches!(
+                    selected,
+                    ProviderAddField::ClaudeBaseUrl | ProviderAddField::CodexBaseUrl
+                ) =>
+            {
+                let (enabled, app_type) = {
+                    let Some(FormState::ProviderAdd(provider)) = self.form.as_mut() else {
+                        return None;
+                    };
+                    if !provider.supports_full_url_mode() {
+                        return Some(Action::None);
+                    }
+                    (provider.toggle_full_url_mode(), provider.app_type.clone())
+                };
+                if enabled
+                    && !data
+                        .proxy
+                        .routes_current_app_through_proxy(&app_type)
+                        .unwrap_or(false)
+                {
+                    self.overlay = Overlay::Confirm(ConfirmOverlay {
+                        title: texts::tui_claude_api_format_requires_proxy_title().to_string(),
+                        message: texts::tui_full_url_requires_proxy_message().to_string(),
+                        action: ConfirmAction::ProviderApiFormatProxyNotice,
+                    });
+                }
+                Some(Action::None)
+            }
             KeyCode::Char(' ') | KeyCode::Enter => {
                 Some(self.handle_provider_field_activate(selected, key, data))
             }
@@ -1120,6 +1149,7 @@ impl App {
 
         Action::ProviderModelFetch {
             base_url: provider.codex_base_url.value.clone(),
+            is_full_url: provider.is_full_url,
             api_key: (!provider.codex_api_key.value.trim().is_empty())
                 .then(|| provider.codex_api_key.value.clone()),
             custom_user_agent: (!provider.custom_user_agent.value.trim().is_empty())
@@ -1368,6 +1398,7 @@ impl App {
 
         Action::ProviderModelFetch {
             base_url: provider.hermes_base_url.value.clone(),
+            is_full_url: false,
             api_key: Some(provider.hermes_api_key.value.clone()),
             custom_user_agent: (!provider.custom_user_agent.value.trim().is_empty())
                 .then(|| provider.custom_user_agent.value.clone()),
@@ -1421,6 +1452,7 @@ impl App {
         };
         Action::ProviderModelFetch {
             base_url,
+            is_full_url: provider.is_full_url && matches!(selected, ProviderAddField::CodexModel),
             api_key,
             custom_user_agent: (!provider.custom_user_agent.value.trim().is_empty())
                 .then(|| provider.custom_user_agent.value.clone()),

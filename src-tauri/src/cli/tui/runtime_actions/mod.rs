@@ -810,6 +810,7 @@ pub(crate) fn handle_action(
         Action::ProviderQuotaRefresh { .. } => Ok(()),
         Action::ProviderModelFetch {
             base_url,
+            is_full_url,
             api_key,
             custom_user_agent,
             codex_oauth,
@@ -819,6 +820,7 @@ pub(crate) fn handle_action(
         } => providers::model_fetch(
             &mut ctx,
             base_url,
+            is_full_url,
             api_key,
             custom_user_agent,
             codex_oauth,

@@ -119,6 +119,7 @@ pub enum Action {
     },
     ProviderModelFetch {
         base_url: String,
+        is_full_url: bool,
         api_key: Option<String>,
         custom_user_agent: Option<String>,
         codex_oauth: bool,

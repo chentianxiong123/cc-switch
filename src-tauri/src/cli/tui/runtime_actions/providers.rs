@@ -174,13 +174,45 @@ fn provider_switch_proxy_notice_overlay(
     provider: &crate::provider::Provider,
     proxy_ready: bool,
 ) -> Option<Overlay> {
-    provider_switch_proxy_notice_api_format(app_type, provider, proxy_ready).map(|api_format| {
-        Overlay::Confirm(ConfirmOverlay {
-            title: texts::tui_claude_api_format_requires_proxy_title().to_string(),
-            message: texts::tui_claude_api_format_requires_proxy_message(api_format),
-            action: ConfirmAction::ProviderApiFormatProxyNotice,
-        })
-    })
+    let message = provider_switch_proxy_notice_api_format(app_type, provider, proxy_ready)
+        .map(texts::tui_claude_api_format_requires_proxy_message)
+        .or_else(|| {
+            provider_switch_full_url_requires_proxy(app_type, provider, proxy_ready)
+                .then(|| texts::tui_full_url_requires_proxy_message().to_string())
+        })?;
+
+    Some(Overlay::Confirm(ConfirmOverlay {
+        title: texts::tui_claude_api_format_requires_proxy_title().to_string(),
+        message,
+        action: ConfirmAction::ProviderApiFormatProxyNotice,
+    }))
+}
+
+fn provider_switch_full_url_requires_proxy(
+    app_type: &crate::app_config::AppType,
+    provider: &crate::provider::Provider,
+    proxy_ready: bool,
+) -> bool {
+    let is_official = match app_type {
+        crate::app_config::AppType::Codex => provider.is_codex_official(),
+        crate::app_config::AppType::Claude => provider
+            .category
+            .as_deref()
+            .is_some_and(|category| category.eq_ignore_ascii_case("official")),
+        _ => false,
+    };
+    !proxy_ready
+        && matches!(
+            app_type,
+            crate::app_config::AppType::Claude | crate::app_config::AppType::Codex
+        )
+        && !provider.is_codex_oauth()
+        && !is_official
+        && provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.is_full_url)
+            .unwrap_or(false)
 }
 
 fn provider_requires_local_proxy(
@@ -446,6 +478,7 @@ pub(super) fn stream_check(ctx: &mut RuntimeActionContext<'_>, id: String) -> Re
 pub(super) fn model_fetch(
     ctx: &mut RuntimeActionContext<'_>,
     base_url: String,
+    is_full_url: bool,
     api_key: Option<String>,
     custom_user_agent: Option<String>,
     codex_oauth: bool,
@@ -483,6 +516,7 @@ pub(super) fn model_fetch(
     if let Err(err) = tx.send(ModelFetchReq::Fetch {
         request_id,
         base_url,
+        is_full_url,
         api_key,
         custom_user_agent,
         codex_oauth,
@@ -1800,6 +1834,50 @@ mod tests {
         let notice = provider_switch_proxy_notice_api_format(&AppType::Claude, &provider, false);
 
         assert_eq!(notice, Some("openai_responses"));
+    }
+
+    #[test]
+    fn provider_switch_full_url_notice_covers_claude_and_codex_only_when_proxy_is_needed() {
+        for app_type in [AppType::Claude, AppType::Codex] {
+            let mut provider = Provider::with_id(
+                "full-url".to_string(),
+                "Full URL".to_string(),
+                serde_json::json!({}),
+                None,
+            );
+            provider.meta = Some(crate::provider::ProviderMeta {
+                is_full_url: Some(true),
+                ..Default::default()
+            });
+
+            assert!(provider_switch_full_url_requires_proxy(
+                &app_type, &provider, false
+            ));
+            assert!(!provider_switch_full_url_requires_proxy(
+                &app_type, &provider, true
+            ));
+        }
+    }
+
+    #[test]
+    fn provider_switch_full_url_notice_ignores_managed_codex_oauth() {
+        let mut provider = Provider::with_id(
+            "codex-oauth".to_string(),
+            "Codex".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        provider.meta = Some(crate::provider::ProviderMeta {
+            provider_type: Some("codex_oauth".to_string()),
+            is_full_url: Some(true),
+            ..Default::default()
+        });
+
+        assert!(!provider_switch_full_url_requires_proxy(
+            &AppType::Claude,
+            &provider,
+            false
+        ));
     }
 
     #[test]

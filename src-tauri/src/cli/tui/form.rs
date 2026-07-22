@@ -541,6 +541,7 @@ pub struct ProviderAddFormState {
     claude_tool_search_touched: bool,
     pub claude_disable_auto_upgrade: bool,
     claude_disable_auto_upgrade_touched: bool,
+    pub is_full_url: bool,
     pub claude_quick_config_idx: usize,
     pub codex_goal_mode: bool,
     codex_goal_mode_touched: bool,

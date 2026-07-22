@@ -87,6 +87,15 @@ struct CopilotOptimization {
     request_classification: bool,
 }
 
+fn provider_uses_full_url(provider: &Provider) -> bool {
+    provider
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.is_full_url)
+        .unwrap_or(false)
+        && !provider.is_codex_oauth()
+}
+
 impl RequestForwarder {
     pub(super) async fn prepare_request(
         &self,
@@ -101,11 +110,7 @@ impl RequestForwarder {
         let is_claude_request = matches!(app_type, AppType::Claude);
         let mut upstream_endpoint = self.router.upstream_endpoint(app_type, provider, endpoint);
         let mut base_url = adapter.extract_base_url(provider)?;
-        let is_full_url = provider
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.is_full_url)
-            .unwrap_or(false);
+        let is_full_url = provider_uses_full_url(provider);
         let is_copilot = is_claude_request
             && (provider.is_github_copilot() || base_url.contains("githubcopilot.com"));
         let (mut mapped_body, _, _) = apply_model_mapping(body.clone(), provider);
@@ -441,11 +446,7 @@ async fn build_request(
 ) -> Result<reqwest::RequestBuilder, ProxyError> {
     let (endpoint_path, endpoint_query) = split_endpoint_and_query(endpoint);
     let base_url_trimmed = base_url.trim_end_matches('/');
-    let is_full_url = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.is_full_url)
-        .unwrap_or(false);
+    let is_full_url = provider_uses_full_url(provider);
     let url = if claude_api_format == Some("gemini_native") {
         super::super::gemini_url::resolve_gemini_native_url(base_url, endpoint, is_full_url)
     } else if is_full_url

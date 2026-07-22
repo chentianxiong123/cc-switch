@@ -191,6 +191,7 @@ impl ProviderAddFormState {
             claude_tool_search_touched: false,
             claude_disable_auto_upgrade: false,
             claude_disable_auto_upgrade_touched: false,
+            is_full_url: false,
             claude_quick_config_idx: 0,
             codex_goal_mode: false,
             codex_goal_mode_touched: false,
@@ -1961,6 +1962,33 @@ impl ProviderAddFormState {
     pub fn toggle_claude_disable_auto_upgrade(&mut self) {
         self.claude_disable_auto_upgrade = !self.claude_disable_auto_upgrade;
         self.claude_disable_auto_upgrade_touched = true;
+    }
+
+    pub fn supports_full_url_mode(&self) -> bool {
+        match self.app_type {
+            AppType::Claude => {
+                !self.is_claude_official_provider() && !self.is_claude_codex_oauth_provider()
+            }
+            AppType::Codex => !self.is_codex_official_provider(),
+            AppType::Gemini | AppType::OpenCode | AppType::Hermes | AppType::OpenClaw => false,
+        }
+    }
+
+    pub fn full_url_mode_enabled_for_field(&self, field: ProviderAddField) -> bool {
+        self.is_full_url
+            && self.supports_full_url_mode()
+            && matches!(
+                (&self.app_type, field),
+                (AppType::Claude, ProviderAddField::ClaudeBaseUrl)
+                    | (AppType::Codex, ProviderAddField::CodexBaseUrl)
+            )
+    }
+
+    pub fn toggle_full_url_mode(&mut self) -> bool {
+        if self.supports_full_url_mode() {
+            self.is_full_url = !self.is_full_url;
+        }
+        self.is_full_url
     }
 
     pub fn toggle_codex_fast_mode(&mut self) {

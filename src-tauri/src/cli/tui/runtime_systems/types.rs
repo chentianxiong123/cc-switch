@@ -698,6 +698,7 @@ pub(crate) enum ModelFetchReq {
     Fetch {
         request_id: u64,
         base_url: String,
+        is_full_url: bool,
         api_key: Option<String>,
         custom_user_agent: Option<String>,
         codex_oauth: bool,
@@ -740,11 +741,29 @@ pub(crate) fn model_fetch_strategy_for_field(field: ProviderAddField) -> ModelFe
 pub(crate) fn build_model_fetch_candidate_urls(
     base_url: &str,
     strategy: ModelFetchStrategy,
+    is_full_url: bool,
 ) -> Vec<String> {
     let base = base_url.trim().trim_end_matches('/');
     if base.is_empty() {
         return Vec::new();
     }
+
+    if is_full_url {
+        let mut urls = Vec::new();
+        if let Some(index) = base.find("/v1/") {
+            urls.push(format!("{}/v1/models", &base[..index]));
+        } else if let Some(index) = base.rfind('/') {
+            let root = &base[..index];
+            if root
+                .find("://")
+                .is_some_and(|scheme| root.len() > scheme.saturating_add(3))
+            {
+                urls.push(format!("{root}/v1/models"));
+            }
+        }
+        return urls;
+    }
+
     if base.ends_with("/models") {
         return vec![base.to_string()];
     }
@@ -835,13 +854,18 @@ pub(crate) fn parse_model_ids_from_response(payload: &Value) -> Vec<String> {
 
 pub(crate) async fn fetch_provider_models_for_tui(
     base_url: &str,
+    is_full_url: bool,
     api_key: Option<&str>,
     custom_user_agent: Option<&str>,
     strategy: ModelFetchStrategy,
 ) -> Result<Vec<String>, String> {
-    let candidate_urls = build_model_fetch_candidate_urls(base_url, strategy);
+    let candidate_urls = build_model_fetch_candidate_urls(base_url, strategy, is_full_url);
     if candidate_urls.is_empty() {
-        return Err("URL cannot be empty".to_string());
+        return Err(if is_full_url && !base_url.trim().is_empty() {
+            "Cannot derive models endpoint from full URL".to_string()
+        } else {
+            "URL cannot be empty".to_string()
+        });
     }
 
     let client = reqwest::Client::builder()

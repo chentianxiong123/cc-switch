@@ -176,6 +176,72 @@ fn provider_form_shows_api_key_in_table_value() {
 }
 
 #[test]
+fn provider_full_url_badge_stays_in_value_and_is_localized() {
+    let _lock = lock_env();
+    for (language, badge) in [
+        (Language::English, "[Full URL]"),
+        (Language::Chinese, "[完整 URL]"),
+    ] {
+        let _language = use_test_language(language);
+        for (app_type, field) in [
+            (AppType::Claude, ProviderAddField::ClaudeBaseUrl),
+            (AppType::Codex, ProviderAddField::CodexBaseUrl),
+        ] {
+            let mut form = crate::cli::tui::form::ProviderAddFormState::new(app_type);
+            match field {
+                ProviderAddField::ClaudeBaseUrl => {
+                    form.claude_base_url.set("https://relay.example/request")
+                }
+                ProviderAddField::CodexBaseUrl => {
+                    form.codex_base_url.set("https://relay.example/request")
+                }
+                _ => unreachable!(),
+            }
+            let (label_before, value_before) = super::provider_field_label_and_value(&form, field);
+            form.is_full_url = true;
+            let (label_after, value_after) = super::provider_field_label_and_value(&form, field);
+
+            assert_eq!(label_after, label_before);
+            assert_eq!(value_before, "https://relay.example/request");
+            assert_eq!(
+                value_after,
+                format!("{badge} https://relay.example/request")
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_full_url_badge_remains_visible_while_editing_on_narrow_terminal() {
+    let _lock = lock_env();
+    let _language = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::Fields;
+    form.claude_base_url
+        .set("https://relay.example/custom/chat/completions");
+    form.is_full_url = true;
+    form.field_idx = form
+        .fields()
+        .iter()
+        .position(|field| *field == ProviderAddField::ClaudeBaseUrl)
+        .expect("Claude Base URL field");
+    assert!(form.begin_main_text_edit(ProviderAddField::ClaudeBaseUrl));
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let rendered = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        72,
+        24,
+    ));
+    assert!(rendered.contains("[Full URL]"), "{rendered}");
+    assert!(rendered.contains("pletions"), "{rendered}");
+}
+
+#[test]
 fn claude_model_picker_renders_role_scoped_one_m_controls_and_dynamic_keys() {
     let _lock = lock_env();
     let _lang = use_test_language(Language::English);
@@ -7361,7 +7427,7 @@ fn user_agent_picker_renders_custom_clear_and_all_upstream_presets() {
 }
 
 #[test]
-fn provider_api_format_proxy_notice_overlay_uses_close_actions() {
+fn provider_api_format_proxy_notice_overlay_uses_single_close_action() {
     let _lock = lock_env();
     let _no_color = EnvGuard::remove("NO_COLOR");
 
@@ -7382,7 +7448,10 @@ fn provider_api_format_proxy_notice_overlay_uses_close_actions() {
         all.contains("Enter close"),
         "expected Enter close hint: {all}"
     );
-    assert!(all.contains("Esc close"), "expected Esc close hint: {all}");
+    assert!(
+        !all.contains("Esc close"),
+        "should not repeat the close action: {all}"
+    );
     assert!(
         !all.contains("Enter confirm"),
         "should not show confirm hint: {all}"
@@ -11577,6 +11646,57 @@ fn provider_form_model_field_hints_enter_edit_and_f_fetch() {
             .find(|(key, _label)| *key == "f")
             .map(|(_key, label)| *label),
         Some(texts::tui_key_fetch_model())
+    );
+}
+
+#[test]
+fn provider_base_url_key_bar_advertises_full_url_shortcut() {
+    for field in [
+        ProviderAddField::ClaudeBaseUrl,
+        ProviderAddField::CodexBaseUrl,
+    ] {
+        let keys = super::add_form_key_items(FormFocus::Fields, false, Some(field));
+        assert_eq!(
+            keys.iter()
+                .find(|(key, _label)| *key == "f")
+                .map(|(_key, label)| *label),
+            Some(texts::tui_full_url_label())
+        );
+    }
+
+    let editing = super::add_form_key_items(
+        FormFocus::Fields,
+        true,
+        Some(ProviderAddField::ClaudeBaseUrl),
+    );
+    assert!(editing.iter().all(|(key, _label)| *key != "f"));
+}
+
+#[test]
+fn provider_base_url_key_bar_keeps_full_url_shortcut_visible_when_narrow() {
+    let _lock = lock_env();
+    let _language = use_test_language(Language::English);
+    let mut app = App::new(Some(AppType::Claude));
+    app.route = Route::Providers;
+    app.focus = Focus::Content;
+    let mut form = crate::cli::tui::form::ProviderAddFormState::new(AppType::Claude);
+    form.focus = FormFocus::Fields;
+    form.field_idx = form
+        .fields()
+        .iter()
+        .position(|field| *field == ProviderAddField::ClaudeBaseUrl)
+        .expect("Claude Base URL field");
+    app.form = Some(FormState::ProviderAdd(form));
+
+    let rendered = all_text(&render_with_size(
+        &app,
+        &minimal_data(&app.app_type),
+        72,
+        24,
+    ));
+    assert!(
+        rendered.contains("f Full URL") || rendered.contains("f=Full URL"),
+        "{rendered}"
     );
 }
 

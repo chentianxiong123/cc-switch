@@ -33,6 +33,7 @@ enum ModelFetchSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ModelFetchTarget {
     base_url: String,
+    is_full_url: bool,
     auth_value: Option<String>,
     custom_user_agent: Option<String>,
     strategy: ProviderModelFetchStrategy,
@@ -329,6 +330,7 @@ fn fetch_models_from_source(source: &ModelFetchSource) -> Result<Vec<String>, Ap
         ModelFetchSource::Http(target) => runtime.block_on(async {
             crate::cli::tui::fetch_provider_models_for_tui(
                 &target.base_url,
+                target.is_full_url,
                 target.auth_value.as_deref(),
                 target.custom_user_agent.as_deref(),
                 to_tui_strategy(target.strategy),
@@ -757,6 +759,13 @@ fn model_fetch_target(
         .meta
         .as_ref()
         .and_then(|meta| meta.custom_user_agent.clone());
+    let is_full_url = matches!(app_type, AppType::Claude | AppType::Codex)
+        && !provider.is_codex_oauth()
+        && provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.is_full_url)
+            .unwrap_or(false);
 
     match app_type {
         AppType::Claude => {
@@ -771,6 +780,7 @@ fn model_fetch_target(
 
             Ok(ModelFetchTarget {
                 base_url,
+                is_full_url,
                 auth_value: Some(auth_value),
                 custom_user_agent,
                 strategy,
@@ -779,6 +789,7 @@ fn model_fetch_target(
         AppType::Codex => {
             Ok(ModelFetchTarget {
                 base_url,
+                is_full_url,
                 auth_value: Some(StreamCheckService::extract_codex_key(provider).ok_or_else(
                     || AppError::Message(format!("Missing API key for provider '{}'", provider.id)),
                 )?),
@@ -790,6 +801,7 @@ fn model_fetch_target(
             let (auth_value, strategy) = extract_gemini_model_fetch_auth(provider)?;
             Ok(ModelFetchTarget {
                 base_url,
+                is_full_url,
                 auth_value: Some(auth_value),
                 custom_user_agent,
                 strategy,
@@ -797,6 +809,7 @@ fn model_fetch_target(
         }
         AppType::OpenCode => Ok(ModelFetchTarget {
             base_url,
+            is_full_url,
             auth_value: Some(
                 provider
                     .settings_config
@@ -815,6 +828,7 @@ fn model_fetch_target(
         }),
         AppType::Hermes => Ok(ModelFetchTarget {
             base_url,
+            is_full_url,
             auth_value: Some(
                 provider
                     .settings_config
@@ -833,6 +847,7 @@ fn model_fetch_target(
         }),
         AppType::OpenClaw => Ok(ModelFetchTarget {
             base_url,
+            is_full_url,
             auth_value: Some(
                 provider
                     .settings_config
@@ -871,6 +886,7 @@ fn one_off_model_fetch_target(
 
     Ok(ModelFetchTarget {
         base_url,
+        is_full_url: false,
         auth_value,
         custom_user_agent: None,
         strategy,
@@ -1265,6 +1281,7 @@ mod tests {
         );
         provider.meta = Some(ProviderMeta {
             custom_user_agent: Some("cc-switch-model-fetch/test".to_string()),
+            is_full_url: Some(true),
             ..Default::default()
         });
 
@@ -1275,6 +1292,7 @@ mod tests {
             target.custom_user_agent.as_deref(),
             Some("cc-switch-model-fetch/test")
         );
+        assert!(target.is_full_url);
     }
 
     #[test]

@@ -488,6 +488,7 @@ impl ProviderAddFormState {
         self.clear_text_edit();
         self.id_is_manual = false;
         self.reset_local_proxy_settings_state();
+        self.is_full_url = false;
         if matches!(self.app_type, AppType::Codex) {
             self.codex_prompt_cache_routing = PromptCacheRoutingMode::Auto;
         }

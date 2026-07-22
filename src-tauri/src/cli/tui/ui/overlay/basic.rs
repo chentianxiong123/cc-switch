@@ -49,10 +49,7 @@ pub(super) fn render_confirm_overlay(
             ("N", texts::tui_key_exit_without_save()),
             ("Esc", texts::tui_key_cancel()),
         ],
-        ConfirmAction::ProviderApiFormatProxyNotice => &[
-            ("Enter", texts::tui_key_close()),
-            ("Esc", texts::tui_key_close()),
-        ],
+        ConfirmAction::ProviderApiFormatProxyNotice => &[("Enter", texts::tui_key_close())],
         ConfirmAction::VisibleAppsAutoDetection => &[
             ("Enter", texts::tui_key_use_auto()),
             ("N", texts::tui_key_keep_current()),

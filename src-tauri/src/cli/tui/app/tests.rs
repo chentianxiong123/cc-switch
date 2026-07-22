@@ -2137,6 +2137,7 @@ mod tests {
             action,
             Action::ProviderModelFetch {
                 base_url,
+                is_full_url: false,
                 api_key: Some(api_key),
                 custom_user_agent: Some(custom_user_agent),
                 codex_oauth: false,
@@ -13329,12 +13330,17 @@ mod tests {
             form.codex_model_catalog_field,
             CodexModelCatalogField::ContextWindow
         );
+        let Some(super::super::form::FormState::ProviderAdd(form)) = app.form.as_mut() else {
+            panic!("expected ProviderAdd form");
+        };
+        form.is_full_url = true;
 
         let action = app.on_key(key(KeyCode::Char('f')), &data);
         assert!(matches!(
             action,
             Action::ProviderModelFetch {
                 field: ProviderAddField::CodexLocalRouting,
+                is_full_url: true,
                 ..
             }
         ));
@@ -13566,6 +13572,34 @@ mod tests {
         };
         assert_eq!(form.claude_sonnet_model.value, "next-model");
         assert!(form.claude_model_one_m_enabled(1));
+    }
+
+    #[test]
+    fn provider_claude_full_url_model_fetch_propagates_endpoint_mode() {
+        let mut app = App::new(Some(AppType::Claude));
+        app.route = Route::Providers;
+        app.focus = Focus::Content;
+        let mut form = ProviderAddFormState::new(AppType::Claude);
+        form.claude_base_url
+            .set("https://relay.example/v1/chat/completions");
+        form.is_full_url = true;
+        app.form = Some(FormState::ProviderAdd(form));
+        app.overlay = Overlay::ClaudeModelPicker {
+            selected: 0,
+            column: ClaudeModelPickerColumn::Model,
+            editing: false,
+        };
+
+        let action = app.on_key(key(KeyCode::Char(' ')), &data());
+
+        assert!(matches!(
+            action,
+            Action::ProviderModelFetch {
+                is_full_url: true,
+                field: ProviderAddField::ClaudeModelConfig,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -14471,6 +14505,67 @@ mod tests {
     }
 
     #[test]
+    fn provider_base_url_f_toggles_full_url_for_claude_and_codex() {
+        for app_type in [AppType::Claude, AppType::Codex] {
+            let mut app = open_provider_fields_form(app_type.clone());
+            let field = match app_type {
+                AppType::Claude => ProviderAddField::ClaudeBaseUrl,
+                AppType::Codex => ProviderAddField::CodexBaseUrl,
+                _ => unreachable!(),
+            };
+            select_provider_field(&mut app, field);
+            let mut ready = data();
+            ready.proxy.running = true;
+            ready.proxy.managed_runtime = true;
+            match app_type {
+                AppType::Claude => ready.proxy.claude_takeover = true,
+                AppType::Codex => ready.proxy.codex_takeover = true,
+                _ => unreachable!(),
+            }
+
+            app.on_key(key(KeyCode::Char('f')), &ready);
+            assert!(matches!(
+                app.form,
+                Some(FormState::ProviderAdd(ref form)) if form.is_full_url
+            ));
+            app.on_key(key(KeyCode::Char('f')), &ready);
+            assert!(matches!(
+                app.form,
+                Some(FormState::ProviderAdd(ref form)) if !form.is_full_url
+            ));
+        }
+    }
+
+    #[test]
+    fn provider_full_url_toggle_warns_when_local_proxy_is_not_ready() {
+        let mut app = open_provider_fields_form(AppType::Codex);
+        select_provider_field(&mut app, ProviderAddField::CodexBaseUrl);
+
+        app.on_key(key(KeyCode::Char('f')), &data());
+
+        assert!(matches!(
+            app.overlay,
+            Overlay::Confirm(ConfirmOverlay { ref message, action: ConfirmAction::ProviderApiFormatProxyNotice, .. })
+                if message == texts::tui_full_url_requires_proxy_message()
+        ));
+    }
+
+    #[test]
+    fn provider_base_url_f_is_text_while_editing() {
+        let mut app = open_provider_fields_form(AppType::Claude);
+        select_provider_field(&mut app, ProviderAddField::ClaudeBaseUrl);
+        app.on_key(key(KeyCode::Enter), &data());
+
+        app.on_key(key(KeyCode::Char('f')), &data());
+
+        assert!(matches!(
+            app.form,
+            Some(FormState::ProviderAdd(ref form))
+                if form.claude_base_url.value == "f" && !form.is_full_url
+        ));
+    }
+
+    #[test]
     fn provider_action_rows_ignore_space() {
         let mut app = open_provider_fields_form(AppType::Claude);
         select_provider_field(&mut app, ProviderAddField::ClaudeQuickConfig);
@@ -14775,6 +14870,9 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("keep local routing enabled"), "{text}");
+        assert!(text.contains("Press f"), "{text}");
+        assert!(text.contains("exact request URL"), "{text}");
+        assert!(text.contains("requires the local proxy"), "{text}");
         assert!(!text.contains("Codex 原生"), "{text}");
     }
 

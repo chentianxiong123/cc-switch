@@ -875,6 +875,7 @@ impl App {
                         .flatten();
                     Action::ProviderModelFetch {
                         base_url: provider.claude_base_url.value.clone(),
+                        is_full_url: provider.is_full_url,
                         api_key: (!provider.claude_api_key.value.trim().is_empty())
                             .then(|| provider.claude_api_key.value.clone()),
                         custom_user_agent: (!provider.custom_user_agent.value.trim().is_empty())

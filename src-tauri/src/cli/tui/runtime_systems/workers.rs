@@ -490,6 +490,7 @@ fn model_fetch_worker_loop(rx: mpsc::Receiver<ModelFetchReq>, tx: mpsc::Sender<M
         let ModelFetchReq::Fetch {
             request_id,
             base_url,
+            is_full_url,
             api_key,
             custom_user_agent,
             codex_oauth,
@@ -508,6 +509,7 @@ fn model_fetch_worker_loop(rx: mpsc::Receiver<ModelFetchReq>, tx: mpsc::Sender<M
             rt.block_on(async {
                 fetch_provider_models_for_tui(
                     &base_url,
+                    is_full_url,
                     api_key.as_deref(),
                     custom_user_agent.as_deref(),
                     strategy,

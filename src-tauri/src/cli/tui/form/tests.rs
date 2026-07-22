@@ -417,6 +417,7 @@ fn provider_edit_form_codex_oauth_loads_account_and_fast_mode() {
         "meta": {
             "providerType": "codex_oauth",
             "apiFormat": "openai_responses",
+            "isFullUrl": true,
             "codexFastMode": true,
             "authBinding": {
                 "source": "managed_account",
@@ -432,10 +433,50 @@ fn provider_edit_form_codex_oauth_loads_account_and_fast_mode() {
     assert!(form.is_claude_codex_oauth_provider());
     assert_eq!(form.codex_oauth_account_id.as_deref(), Some("acc-123"));
     assert!(form.codex_fast_mode);
+    assert!(
+        !form.is_full_url,
+        "managed Codex OAuth must ignore stale full-URL metadata"
+    );
     assert_eq!(
         form.claude_api_format,
         crate::cli::tui::form::ClaudeApiFormat::OpenAiResponses
     );
+    assert!(form.to_provider_json_value()["meta"]
+        .get("isFullUrl")
+        .is_none());
+}
+
+#[test]
+fn provider_add_form_full_url_support_matches_upstream_apps() {
+    for app_type in [AppType::Claude, AppType::Codex] {
+        assert!(ProviderAddFormState::new(app_type).supports_full_url_mode());
+    }
+    for app_type in [
+        AppType::Gemini,
+        AppType::OpenCode,
+        AppType::Hermes,
+        AppType::OpenClaw,
+    ] {
+        assert!(!ProviderAddFormState::new(app_type).supports_full_url_mode());
+    }
+}
+
+#[test]
+fn provider_add_form_template_change_clears_hidden_full_url_state() {
+    for (app_type, template) in [
+        (AppType::Claude, "Claude Official"),
+        (AppType::Claude, "Codex"),
+        (AppType::Codex, "OpenAI Official"),
+    ] {
+        let mut form = ProviderAddFormState::new(app_type.clone());
+        form.is_full_url = true;
+        form.apply_template(template_index_by_label(app_type, template), &[]);
+
+        assert!(!form.is_full_url, "{template} must clear Full URL mode");
+        assert!(form.to_provider_json_value()["meta"]
+            .get("isFullUrl")
+            .is_none());
+    }
 }
 
 #[test]
@@ -2150,6 +2191,24 @@ fn provider_add_form_claude_api_format_round_trips_gemini_native_meta() {
     assert!(saved["settingsConfig"]
         .get("openrouter_compat_mode")
         .is_none());
+}
+
+#[test]
+fn provider_add_form_codex_round_trips_full_url_meta() {
+    let mut form = ProviderAddFormState::new(AppType::Codex);
+    form.id.set("codex-full-url");
+    form.name.set("Codex Full URL");
+    form.codex_base_url
+        .set("https://relay.example/custom/responses");
+    form.is_full_url = true;
+
+    let saved = form.to_provider_json_value();
+    assert_eq!(saved["meta"]["isFullUrl"], true);
+
+    let provider: Provider = serde_json::from_value(saved).expect("saved provider should parse");
+    let loaded = ProviderAddFormState::from_provider(AppType::Codex, &provider);
+    assert!(loaded.is_full_url);
+    assert_eq!(loaded.to_provider_json_value()["meta"]["isFullUrl"], true);
 }
 
 #[test]

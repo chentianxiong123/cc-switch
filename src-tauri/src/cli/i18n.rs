@@ -1939,6 +1939,14 @@ pub mod texts {
         }
     }
 
+    pub fn tui_full_url_requires_proxy_message() -> &'static str {
+        if is_chinese() {
+            "已开启完整 URL 模式\n必须通过本地代理使用，否则客户端会继续拼接请求路径\n请在主页按 P 开启本地代理"
+        } else {
+            "Full URL mode is enabled.\nThis mode requires the local proxy; otherwise the client will still append its request path.\nPress P on the home page to open local proxy."
+        }
+    }
+
     pub fn tui_label_codex_local_routing() -> &'static str {
         if is_chinese() {
             "本地路由"
@@ -2234,6 +2242,14 @@ pub mod texts {
             "FAST 模式"
         } else {
             "FAST mode"
+        }
+    }
+
+    pub fn tui_full_url_label() -> &'static str {
+        if is_chinese() {
+            "完整 URL"
+        } else {
+            "Full URL"
         }
     }
 
@@ -12831,6 +12847,16 @@ mod tests {
             texts::tui_proxy_dashboard_manual_routing_copy("Claude"),
             "手动路由：Claude 的流量会通过 cc-switch。"
         );
+    }
+
+    #[test]
+    fn full_url_proxy_notice_copy_avoids_orphan_chinese_punctuation() {
+        let _lang = use_test_language(Language::Chinese);
+        let message = texts::tui_full_url_requires_proxy_message();
+
+        assert_eq!(message.lines().count(), 3);
+        assert!(!message.contains('。'));
+        assert!(message.contains("主页按 P 开启本地代理"));
     }
 
     #[test]

@@ -4173,6 +4173,7 @@ fn model_fetch_candidate_urls_prefers_v1_for_anthropic_base() {
     let urls = build_model_fetch_candidate_urls(
         "https://api.anthropic.com",
         ModelFetchStrategy::Anthropic,
+        false,
     );
     assert_eq!(
         urls,
@@ -4188,6 +4189,7 @@ fn model_fetch_candidate_urls_strip_anthropic_compat_suffix() {
     let urls = build_model_fetch_candidate_urls(
         "https://api.deepseek.com/anthropic",
         ModelFetchStrategy::Anthropic,
+        false,
     );
     assert_eq!(
         urls,
@@ -4204,11 +4206,47 @@ fn model_fetch_candidate_urls_for_gemini_v1beta_keeps_models_endpoint() {
     let urls = build_model_fetch_candidate_urls(
         "https://generativelanguage.googleapis.com/v1beta",
         ModelFetchStrategy::GoogleApiKey,
+        false,
     );
     assert_eq!(
         urls,
         vec!["https://generativelanguage.googleapis.com/v1beta/models".to_string()]
     );
+}
+
+#[test]
+fn model_fetch_candidate_urls_derive_models_endpoint_from_full_url() {
+    assert_eq!(
+        build_model_fetch_candidate_urls(
+            "https://relay.example/v1/chat/completions?api-version=2026-01-01",
+            ModelFetchStrategy::Bearer,
+            true,
+        ),
+        vec!["https://relay.example/v1/models".to_string()]
+    );
+    assert_eq!(
+        build_model_fetch_candidate_urls(
+            "https://relay.example/custom/chat/completions",
+            ModelFetchStrategy::Anthropic,
+            true,
+        ),
+        vec!["https://relay.example/custom/chat/v1/models".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn model_fetch_full_url_reports_when_models_endpoint_cannot_be_derived() {
+    let error = fetch_provider_models_for_tui(
+        "https://relay.example",
+        true,
+        None,
+        None,
+        ModelFetchStrategy::Bearer,
+    )
+    .await
+    .expect_err("origin-only full URL should not invent a models endpoint");
+
+    assert_eq!(error, "Cannot derive models endpoint from full URL");
 }
 
 #[tokio::test]
@@ -4247,6 +4285,7 @@ async fn model_fetch_sends_trimmed_custom_user_agent() {
 
     let models = fetch_provider_models_for_tui(
         &format!("http://{address}"),
+        false,
         Some("sk-test"),
         Some("  cc-switch-model-fetch/test  "),
         ModelFetchStrategy::Bearer,

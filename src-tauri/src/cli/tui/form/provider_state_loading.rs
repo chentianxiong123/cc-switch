@@ -24,6 +24,12 @@ pub(super) fn populate_form_from_provider(
         AppType::Hermes => populate_hermes_form(form, provider),
         AppType::OpenClaw => populate_openclaw_form(form, provider),
     }
+    form.is_full_url = form.supports_full_url_mode()
+        && provider
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.is_full_url)
+            .unwrap_or(false);
     populate_local_proxy_settings_form(form, provider);
     populate_usage_query_form(form, provider);
 }

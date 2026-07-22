@@ -777,7 +777,7 @@ async fn streaming_passthrough_prepare_request_forces_identity_accept_encoding()
 }
 
 #[tokio::test]
-async fn codex_oauth_prepare_request_injects_bound_account_headers() {
+async fn codex_oauth_prepare_request_ignores_stale_full_url_and_injects_bound_account_headers() {
     let _lock = lock_test_home_and_settings();
     let _manager = CodexOAuthService::test_manager_with_account(
         "acc-bound",
@@ -789,7 +789,12 @@ async fn codex_oauth_prepare_request_injects_bound_account_headers() {
     .await
     .expect("seed bound account");
 
-    let provider = codex_oauth_provider(Some("acc-bound"));
+    let mut provider = codex_oauth_provider(Some("acc-bound"));
+    provider
+        .meta
+        .as_mut()
+        .expect("Codex OAuth metadata")
+        .is_full_url = Some(true);
     let request = build_request(&AppType::Claude, &provider, HeaderMap::new()).await;
 
     assert_eq!(
